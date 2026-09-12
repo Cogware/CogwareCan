@@ -2,9 +2,13 @@
 //! Global mode, the update-in-progress flag, and the node message channel.
 
 use cogware_can::bus::*;
+use cogware_can::indicators::{self, Indicator};
 use cogware_can::protocol::{self, NODE_BROADCAST};
 use cogware_can::xfer;
 use embedded_hal_0_2::can::Frame;
+
+mod common;
+use common::bus;
 
 const MODE_SPORT: u8 = 1;
 const MODE_TRACK: u8 = 2;
@@ -191,4 +195,163 @@ fn a_state_frame_round_trips_and_junk_is_rejected() {
     let mut master = Bus::new();
     assert!(master.feed(&protocol::frame(0x2D, &[1, 2]).unwrap()).is_none());
     assert!(master.feed(&protocol::frame(1, &[0xEE]).unwrap()).is_none());
+}
+
+// --- tell-tales wired to a node's own pins ---
+
+#[test]
+fn a_node_reports_an_input_and_the_master_lights_the_lamp() {
+    // The whole round trip, which is the point of the opcode: the display
+    // does not light its own lamp, it says so and the master decides. What
+    // comes back is an ordinary gauge broadcast that every screen sees.
+    let _bus = bus();
+    let mut master = Bus::new();
+    let display = BusView::new(3);
+
+    assert!(!indicators::get(Indicator::TurnLeft), "nothing has said yet");
+    let report = display.report_lamp(Indicator::TurnLeft, true).unwrap();
+    let msg = master.feed(&report).unwrap();
+    assert_eq!((msg.node, msg.opcode), (3, Opcode::Input));
+    assert!(indicators::get(Indicator::TurnLeft), "the master ignored it");
+
+    // And the bank goes out as a frame, exactly as any gauge does.
+    let frame = cogware_can::frame_for(cogware_can::INDICATORS1.id).unwrap();
+    assert_eq!(protocol::id_of(&frame), Some(cogware_can::INDICATORS1.id));
+
+    master.feed(&display.report_lamp(Indicator::TurnLeft, false).unwrap());
+    assert!(!indicators::get(Indicator::TurnLeft), "the stalk let go");
+}
+
+#[test]
+fn a_whole_loom_fits_one_frame() {
+    // A node coming back from a bus drop hands its lot over at once: a dash
+    // that arrives in two halves is a dash that is briefly wrong.
+    let _bus = bus();
+    let mut master = Bus::new();
+    let display = BusView::new(1);
+    let loom = [
+        (Indicator::TurnLeft, true),
+        (Indicator::TurnRight, false),
+        (Indicator::HighBeam, true),
+        (Indicator::ParkBrake, true),
+        // Across both banks, since the pack carries the bank in the byte.
+        (Indicator::Fan, true),
+        (Indicator::PitLimiter, false),
+        (Indicator::Knock, true),
+    ];
+    assert_eq!(loom.len(), LAMPS_PER_MSG, "this is the full frame");
+
+    let report = display.report_lamps(&loom).unwrap();
+    master.feed(&report).expect("the master must take it");
+    for (ind, on) in loom {
+        assert_eq!(indicators::get(ind), on, "{}", ind.name());
+    }
+}
+
+#[test]
+fn more_lamps_than_a_frame_holds_is_refused_rather_than_truncated() {
+    // A silent truncation would leave the lamps past the cut stuck at
+    // whatever they were last time, which is the worst of both.
+    let display = BusView::new(1);
+    let too_many = [(Indicator::TurnLeft, true); LAMPS_PER_MSG + 1];
+    assert!(display.report_lamps(&too_many).is_none());
+    assert!(display.report_lamps(&[]).is_none(), "nothing to say");
+    assert!(display.report_lamps(&too_many[..LAMPS_PER_MSG]).is_some());
+}
+
+#[test]
+fn every_lamp_in_the_table_survives_the_pack() {
+    // The byte carries the bank in one bit and the bit in five, which is
+    // exactly the shape of the table. If the table ever grows a third bank
+    // or a thirty-third bit, this is what says so.
+    for ind in indicators::ALL_INDICATORS {
+        for on in [true, false] {
+            assert_eq!(
+                unpack_lamp(pack_lamp(*ind, on)),
+                Some((*ind, on)),
+                "{} {on}",
+                ind.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn every_byte_the_pack_can_produce_names_a_lamp_this_build_has() {
+    // Both banks are full today, so every encodable byte resolves. The day a
+    // bank gains a spare bit, `unpack_lamp` answers None for it and `lamps()`
+    // skips it rather than guessing -- which is what an older display does
+    // when a newer master reports a lamp added after it shipped.
+    for byte in 0..=u8::MAX {
+        let packed = byte & !SPARE_BIT;
+        assert!(unpack_lamp(packed).is_some(), "{packed:#04x}");
+    }
+    // And the refusals the decode rests on.
+    assert!(Indicator::from_bank_bit(3, 0).is_none(), "no third bank");
+    assert!(Indicator::from_bank_bit(1, 32).is_none(), "no bit past 31");
+}
+
+#[test]
+fn a_byte_with_the_spare_bit_set_is_refused_rather_than_read_around_it() {
+    // It cannot have come from this build's pack. If that bit is ever spent
+    // -- on a third bank, most likely -- reading it as though it were not
+    // would light a bank-one lamp for a bank-three one.
+    let _bus = bus();
+    let mut master = Bus::new();
+    let known = pack_lamp(Indicator::TurnLeft, true);
+    assert_eq!(unpack_lamp(known | SPARE_BIT), None);
+
+    // And one good byte beside one bad one still lands, so a newer master's
+    // extra lamp costs an older display only that lamp.
+    let frame = message(1, Opcode::Input, &[known, known | SPARE_BIT]).unwrap();
+    assert_eq!(NodeMsg::parse(&frame).unwrap().lamps().count(), 1);
+    master.feed(&frame);
+    assert!(indicators::get(Indicator::TurnLeft));
+}
+
+#[test]
+fn every_other_opcode_reports_no_lamps() {
+    // A host draining `lamps()` over every message it sees must not have a
+    // mode request or an error decode as a dash state.
+    for (opcode, args) in [
+        (Opcode::ModeRequest, &[MODE_SPORT][..]),
+        (Opcode::Error, &[0x81][..]),
+        (Opcode::Hello, &[][..]),
+        (Opcode::UpdateOffer, &[xfer::kind::CONFIG, 1, 0, 0, 0][..]),
+    ] {
+        let f = message(2, opcode, args).unwrap();
+        let msg = NodeMsg::parse(&f).unwrap();
+        assert_eq!(msg.lamps().count(), 0, "{opcode:?}");
+    }
+}
+
+#[test]
+fn an_input_report_does_not_disturb_the_mode_or_the_state_frame() {
+    // Reporting a stalk must not make the master re-announce: the bus state
+    // has not changed, and a frame per blink is a bus nobody can use.
+    let _bus = bus();
+    let mut master = Bus::new();
+    let display = BusView::new(4);
+    master.set_mode(MODE_TRACK);
+    master.announce().expect("the mode change is news");
+
+    master.feed(&display.report_lamp(Indicator::TurnLeft, true).unwrap());
+    assert_eq!(master.mode(), MODE_TRACK, "the mode moved");
+    assert!(master.announce().is_none(), "a blink re-announced the bus");
+}
+
+#[test]
+fn a_lamp_a_node_reports_reads_back_through_the_ordinary_gauge_path() {
+    // The bank is a gauge, so what the master sends and what a display feeds
+    // back in are the same path every other reading takes.
+    let _bus = bus();
+    let mut master = Bus::new();
+    let display = BusView::new(2);
+    master.feed(&display.report_lamp(Indicator::Fan, true).unwrap());
+
+    let broadcast = cogware_can::frame_for(cogware_can::INDICATORS2.id).unwrap();
+    cogware_can::INDICATORS2.clear();
+    assert!(!indicators::get(Indicator::Fan), "cleared for the test");
+    cogware_can::feed_frame(&broadcast).expect("an ordinary gauge frame");
+    assert!(indicators::get(Indicator::Fan), "it did not come back");
 }

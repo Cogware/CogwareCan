@@ -19,8 +19,12 @@
 //! view.feed(&frame);
 //! if view.update_in_progress() { draw_update_screen(view.progress()); }
 //! if button_pressed { can.send_message(view.request_mode(MODE_SPORT)?).ok(); }
+//! // A tell-tale on one of this node's own pins. It is not lit here: the
+//! // master folds it into the bank and it comes back on the next broadcast.
+//! if stalk_changed { can.send_message(view.report_lamp(Indicator::TurnLeft, on)?).ok(); }
 //! ```
 
+use crate::indicators::{self, Indicator};
 use crate::protocol::{frame, id_of, msg_node, node_msg_id, BUS_STATE_ID, NODE_BROADCAST};
 use embedded_hal_0_2::can::Frame;
 use mcp2515::frame::CanFrame;
@@ -50,6 +54,14 @@ pub enum Opcode {
     UpdateOffer = 3,
     /// `[4]` — this node has just booted and wants the state broadcast again.
     Hello = 4,
+    /// `[5, lamp..]` — a tell-tale wired to an input on this node has changed.
+    ///
+    /// A display with the turn stalk on a spare pin reports it here; the
+    /// master folds it into `INDICATORS1`/`INDICATORS2` and broadcasts those
+    /// as it broadcasts any gauge, so every screen lights the lamp together
+    /// and none of them has to be the one that decided. See [`pack_lamp`] for
+    /// the byte, and up to seven of them fit one frame.
+    Input = 5,
 }
 
 impl Opcode {
@@ -60,10 +72,62 @@ impl Opcode {
             2 => Opcode::Error,
             3 => Opcode::UpdateOffer,
             4 => Opcode::Hello,
+            5 => Opcode::Input,
             _ => return None,
         })
     }
 }
+
+/// The most tell-tales one `Input` message carries.
+///
+/// Seven, because a node message has seven bytes after its opcode and a lamp
+/// packs into one. A display with a full loom reports the lot in a single
+/// frame, which matters more than the byte it saves: a dash that arrives in
+/// two halves is a dash that is briefly wrong.
+pub const LAMPS_PER_MSG: usize = 7;
+
+/// A tell-tale and its state, as one byte of an `Input` message.
+///
+/// `bit 7` is the state, `bit 5` the bank (0 for `INDICATORS1`), and `bits
+/// 0..=4` the bit within it. Bit 6 is spare and written zero.
+///
+/// Packed rather than sent as a `[bank, bit, on]` triple so that seven fit a
+/// frame instead of two. The layout is fixed by the shape of the table -- two
+/// banks of thirty-two -- and `indicators` is where that is decided, so it
+/// cannot drift without this failing to build.
+pub const fn pack_lamp(ind: Indicator, on: bool) -> u8 {
+    // The table's banks are 1 and 2, and one bit distinguishes them.
+    let bank = (ind.bank() - 1) & 0x01;
+    (on as u8) << 7 | bank << 5 | (ind.bit() & 0x1F)
+}
+
+/// Read a byte [`pack_lamp`] wrote.
+///
+/// `None` for a lamp this build's table does not have, which is what a display
+/// running older firmware sees when a newer master reports one that was added
+/// after it shipped. Skipped rather than guessed: bits are never renumbered,
+/// so an unknown one is genuinely unknown and lighting the wrong lamp would be
+/// worse than lighting none.
+///
+/// A byte with the spare bit set is refused for the same reason. It cannot
+/// have come from this build's `pack_lamp`, and if that bit is ever spent --
+/// on a third bank, most likely -- reading it as though it were not would
+/// light a bank-one lamp for a bank-three one. Refusing now is what makes
+/// spending it later safe.
+pub const fn unpack_lamp(byte: u8) -> Option<(Indicator, bool)> {
+    if byte & SPARE_BIT != 0 {
+        return None;
+    }
+    let on = byte & 0x80 != 0;
+    let bank = ((byte >> 5) & 0x01) + 1;
+    match Indicator::from_bank_bit(bank, byte & 0x1F) {
+        Some(ind) => Some((ind, on)),
+        None => None,
+    }
+}
+
+/// The bit of a packed lamp that nothing has spent yet.
+pub const SPARE_BIT: u8 = 1 << 6;
 
 /// One message from a node, with the sender taken from the frame's ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +180,19 @@ impl NodeMsg {
             return None;
         }
         Some((a[0], u32::from_le_bytes([a[1], a[2], a[3], a[4]])))
+    }
+
+    /// The tell-tales this message reports, if it is an `Input`.
+    ///
+    /// Empty for any other opcode, and a byte naming a lamp this build does
+    /// not have is skipped rather than guessed at.
+    pub fn lamps(&self) -> impl Iterator<Item = (Indicator, bool)> + '_ {
+        let carried = if self.opcode == Opcode::Input {
+            self.args()
+        } else {
+            &[]
+        };
+        carried.iter().filter_map(|b| unpack_lamp(*b))
     }
 }
 
@@ -267,6 +344,15 @@ impl Bus {
                 }
             }
             Opcode::Hello => self.dirty = true,
+            // The master owns the banks, so an input reported by a node is
+            // applied here and goes out on the next gauge broadcast like any
+            // other reading. A node that lit its own lamp instead would be
+            // the one screen in the car that disagreed with the others.
+            Opcode::Input => {
+                for (ind, on) in msg.lamps() {
+                    indicators::set(ind, on);
+                }
+            }
             _ => {}
         }
         Some(msg)
@@ -370,6 +456,35 @@ impl BusView {
     /// Ask the master to re-announce the state, after a boot or a bus drop.
     pub fn hello(&self) -> Option<CanFrame> {
         message(self.node, Opcode::Hello, &[])
+    }
+
+    /// Tell the master that a tell-tale wired to an input on this node has
+    /// changed.
+    ///
+    /// The lamp is not lit here. The master folds the bit into the bank and
+    /// broadcasts it, and the lamp comes back on the bus -- on this display
+    /// and on every other one at the same time, which is the whole reason the
+    /// report goes out rather than straight onto the screen.
+    pub fn report_lamp(&self, ind: Indicator, on: bool) -> Option<CanFrame> {
+        self.report_lamps(&[(ind, on)])
+    }
+
+    /// Report several at once, up to [`LAMPS_PER_MSG`] of them.
+    ///
+    /// One frame rather than several, so a node coming back from a bus drop
+    /// hands over its whole loom in a single message: a dash that arrives in
+    /// two halves is a dash that is briefly wrong. `None` for more than a
+    /// frame holds, rather than a silent truncation that would leave a lamp
+    /// stuck at whatever it was last time.
+    pub fn report_lamps(&self, lamps: &[(Indicator, bool)]) -> Option<CanFrame> {
+        if lamps.is_empty() || lamps.len() > LAMPS_PER_MSG {
+            return None;
+        }
+        let mut args = [0u8; LAMPS_PER_MSG];
+        for (i, (ind, on)) in lamps.iter().enumerate() {
+            args[i] = pack_lamp(*ind, *on);
+        }
+        message(self.node, Opcode::Input, &args[..lamps.len()])
     }
 
     /// Forget the announced state, so `is_synced` reports false again.

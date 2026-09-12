@@ -27,7 +27,10 @@
 //! mode and the node-to-master message channel, and `xfer` the master-to-node
 //! file transfer used for over-the-air updates. `indicators` packs the
 //! dashboard tell-tales into two bitfield gauges. All are frame in, frame
-//! out, with no driver or timer of their own.
+//! out, with no driver or timer of their own. A node with a tell-tale wired
+//! to one of its own pins reports it with `bus::BusView::report_lamp`; the
+//! master applies it and broadcasts the bank, so every display lights the
+//! lamp together and none of them is the one that decided.
 //!
 //! `config` is the one module that is not about the bus: it describes the
 //! settings a display holds well enough for an editor to render them, and

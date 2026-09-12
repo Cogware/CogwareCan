@@ -6,10 +6,15 @@
 //! gauge rows, so a display subscribes to them exactly as it does to `RPM`
 //! and the server broadcasts them on the same path.
 //!
+//! `CheckBulb` is the lamp test a car runs at ignition-on: while it is set
+//! every lamp reads as lit, so a display shows the whole dash without the
+//! server having to set each bit and put them back afterwards.
+//!
 //! ```ignore
 //! set(Indicator::TurnLeft, blink);     // server
+//! set(Indicator::CheckBulb, true);     // server, ignition-on lamp test
 //! if get(Indicator::CheckEngine) { .. } // display, after feed_frame
-//! for lit in all().iter() { draw(lit.name()); }
+//! for lit in displayed().iter() { draw(lit.name()); }
 //! ```
 
 use crate::{INDICATORS1, INDICATORS2};
@@ -34,11 +39,29 @@ macro_rules! indicators {
             /// Every indicator in table order.
             pub static ALL_INDICATORS: &[Indicator] = &[$(Indicator::[<$name:camel>]),+];
 
+            /// Every bit the table allocates in `INDICATORS1`.
+            pub const BANK1_ALL: u32 = 0 $(| ((($bank == 1) as u32) << $bit))+;
+
+            /// Every bit the table allocates in `INDICATORS2`.
+            pub const BANK2_ALL: u32 = 0 $(| ((($bank == 2) as u32) << $bit))+;
+
             impl Indicator {
                 /// Its name as written in the table, for a display listing lamps.
                 pub const fn name(self) -> &'static str {
                     match self {
                         $(Indicator::[<$name:camel>] => stringify!($name),)+
+                    }
+                }
+
+                /// The lamp with this discriminant, or `None` if the table has
+                /// none. Bits are never renumbered once shipped, so a value
+                /// off the wire means the same lamp in every build that has
+                /// it -- and `None` in one that predates it, rather than the
+                /// wrong lamp.
+                pub const fn from_u16(v: u16) -> Option<Indicator> {
+                    match v {
+                        $(v if v == (($bank << 8) | $bit) => Some(Indicator::[<$name:camel>]),)+
+                        _ => None,
                     }
                 }
             }
@@ -60,6 +83,11 @@ impl Indicator {
     /// Its bit as a mask over its bank's word.
     pub const fn mask(self) -> u32 {
         1u32 << self.bit()
+    }
+
+    /// The lamp in `bank` at `bit`, or `None` if the table has none there.
+    pub const fn from_bank_bit(bank: u8, bit: u8) -> Option<Indicator> {
+        Indicator::from_u16(((bank as u16) << 8) | bit as u16)
     }
 }
 
@@ -132,7 +160,9 @@ indicators! {
     2: USER8               = 28;
     2: USER9               = 29;
     2: USER10              = 30;
-    2: USER11              = 31;
+    // The lamp test. Both banks were full when it was added, so it took the
+    // last spare user bit rather than renumbering a shipped lamp.
+    2: CHECK_BULB          = 31;
 }
 
 /// Both banks as one value, for building a whole dash state before publishing
@@ -149,6 +179,18 @@ impl IndicatorSet {
     /// A set with every lamp off.
     pub const fn new() -> Self {
         IndicatorSet { bank1: 0, bank2: 0 }
+    }
+
+    /// A set with every lamp the table allocates lit, `CheckBulb` included.
+    pub const fn all_lit() -> Self {
+        IndicatorSet { bank1: BANK1_ALL, bank2: BANK2_ALL }
+    }
+
+    /// What a dash should actually show: every lamp while `CheckBulb` is set,
+    /// otherwise the set as it stands. A display draws from this; a server
+    /// building a state works on the raw set and lets the display expand it.
+    pub const fn displayed(self) -> Self {
+        if self.contains(Indicator::CheckBulb) { Self::all_lit() } else { self }
     }
 
     /// True if `ind` is lit.
@@ -197,17 +239,23 @@ pub fn set(ind: Indicator, on: bool) -> bool {
     next != word
 }
 
-/// True if `ind` is lit. An unset bank reads as all lamps off.
+/// True if `ind` should be lit, which is every lamp while `CheckBulb` is set.
+/// An unset bank reads as all lamps off.
 pub fn get(ind: Indicator) -> bool {
-    all().contains(ind)
+    displayed().contains(ind)
 }
 
-/// Both banks as they stand.
+/// Both banks exactly as they stand, `CheckBulb` left as the single bit it is.
 pub fn all() -> IndicatorSet {
     IndicatorSet {
         bank1: INDICATORS1.get_or(0) as u32,
         bank2: INDICATORS2.get_or(0) as u32,
     }
+}
+
+/// Both banks as a dash should show them: every lamp during a bulb check.
+pub fn displayed() -> IndicatorSet {
+    all().displayed()
 }
 
 /// Publish a whole dash state at once, so a display never sees a half-updated

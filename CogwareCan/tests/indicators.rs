@@ -43,8 +43,9 @@ fn the_top_bit_of_each_bank_survives_the_wire() {
     // Bit 31 is the sign bit of the i32 a gauge stores, so it is the one that
     // would be lost to a widening conversion somewhere in the path.
     indicators::set(Indicator::RevLimit, true);
-    indicators::set(Indicator::User11, true);
+    indicators::set(Indicator::CheckBulb, true);
     assert_eq!(INDICATORS1.get(), Some(-1i32 << 31));
+    assert_eq!(INDICATORS2.get(), Some(-1i32 << 31));
 
     let frames: Vec<_> = [Gauge::Indicators1, Gauge::Indicators2]
         .iter()
@@ -56,9 +57,11 @@ fn the_top_bit_of_each_bank_survives_the_wire() {
     for f in &frames {
         feed_frame(f).expect("an indicator bank is an ordinary gauge frame");
     }
-    assert!(indicators::get(Indicator::RevLimit));
-    assert!(indicators::get(Indicator::User11));
-    assert_eq!(indicators::all().len(), 2);
+    // Raw bits, so the bulb check's expansion cannot stand in for a bit that
+    // did not survive the trip.
+    let landed = indicators::all();
+    assert!(landed.contains(Indicator::RevLimit) && landed.contains(Indicator::CheckBulb));
+    assert_eq!(landed.len(), 2);
 }
 
 #[test]
@@ -110,4 +113,53 @@ fn the_banks_sit_in_the_gauge_range_and_answer_to_lookup() {
         // A display subscribes to a bank exactly as it does to any gauge.
         assert!(g.id <= 0xFF);
     }
+}
+
+#[test]
+fn the_bulb_check_lights_every_lamp() {
+    let _b = bus();
+    indicators::set(Indicator::OilPressure, true);
+    indicators::set(Indicator::CheckBulb, true);
+
+    // A display sees the whole dash lit, warnings it never asked for included.
+    assert!(indicators::get(Indicator::Airbag) && indicators::get(Indicator::Knock));
+    let shown = indicators::displayed();
+    assert_eq!(shown.len(), indicators::ALL_INDICATORS.len());
+    assert_eq!(shown.iter().collect::<Vec<_>>(), indicators::ALL_INDICATORS.to_vec());
+
+    // The banks themselves still carry only what the server set, so the lamp
+    // test ends without having to remember what was lit before it began.
+    let raw = indicators::all();
+    assert_eq!(raw.len(), 2);
+    assert!(raw.contains(Indicator::OilPressure) && !raw.contains(Indicator::Airbag));
+
+    indicators::set(Indicator::CheckBulb, false);
+    assert!(indicators::get(Indicator::OilPressure));
+    assert!(!indicators::get(Indicator::Airbag));
+    assert_eq!(indicators::all(), indicators::displayed());
+}
+
+#[test]
+fn the_bulb_check_rides_the_wire_as_an_ordinary_bit() {
+    let _b = bus();
+    indicators::apply(IndicatorSet::all_lit());
+    assert_eq!(indicators::all().len(), indicators::ALL_INDICATORS.len());
+
+    let f = frame_for(Gauge::Indicators2.id()).expect("bank 2 is set");
+    indicators::clear_all();
+    assert!(!indicators::get(Indicator::CheckBulb));
+    feed_frame(&f).expect("an indicator bank is an ordinary gauge frame");
+    assert!(indicators::get(Indicator::CheckBulb), "bit 31 of bank 2 survives");
+    assert_eq!(indicators::displayed().len(), indicators::ALL_INDICATORS.len());
+}
+
+#[test]
+fn every_allocated_bit_is_in_its_banks_mask() {
+    let lit = IndicatorSet::all_lit();
+    for &i in indicators::ALL_INDICATORS {
+        assert!(lit.contains(i), "{} is missing from its bank mask", i.name());
+    }
+    // Both banks are fully allocated today; the masks say so rather than
+    // assuming it.
+    assert_eq!((lit.bank1, lit.bank2), (indicators::BANK1_ALL, indicators::BANK2_ALL));
 }
