@@ -81,8 +81,8 @@ name = "cogware-can"
 version = "0.1.0"
 dependencies = [
  "critical-section",
- "embedded-hal 0.2.7",
- "mcp2515",
+ "embedded-can",
+ "nb 1.1.0",
  "paste",
 ]
 
@@ -93,6 +93,7 @@ dependencies = [
  "adafruit-qt-py-rp2040",
  "cogware-can",
  "cortex-m-rt",
+ "embedded-can",
  "embedded-graphics",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
@@ -194,6 +195,15 @@ name = "either"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
+
+[[package]]
+name = "embedded-can"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d2e857f87ac832df68fa498d18ddc679175cf3d2e4aa893988e5601baf9438"
+dependencies = [
+ "nb 1.1.0",
+]
 
 [[package]]
 name = "embedded-dma"

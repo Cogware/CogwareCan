@@ -42,6 +42,52 @@ use smart_leds::{brightness, SmartLedsWrite, RGB8};
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 use ws2812_pio::Ws2812;
 
+/// The driver's frame type and the protocol crate's, converted at the seam.
+///
+/// `mcp2515` speaks the CAN traits from `embedded-hal` 0.2 and `cogware_can`
+/// speaks `embedded-can` 0.4. They describe the same eleven bits and the same
+/// eight bytes, and share no types at all, so this is where the two
+/// vocabularies meet -- and the only place in this program that knows which
+/// controller is fitted.
+///
+/// That the crate has a frame of its own is what makes the rest of the loop
+/// portable: a board with a different controller rewrites this module and
+/// nothing else.
+mod seam {
+    use cogware_can::CanFrame as BusFrame;
+    use embedded_can::{ExtendedId as BusExt, Frame as _, Id as BusId, StandardId as BusStd};
+    use embedded_hal_0_2::can::{
+        ExtendedId as DrvExt, Frame as _, Id as DrvId, StandardId as DrvStd,
+    };
+    use mcp2515::frame::CanFrame as DrvFrame;
+
+    /// A frame off the controller, as the protocol crate wants it.
+    pub fn to_bus(f: &DrvFrame) -> Option<BusFrame> {
+        let id = match f.id() {
+            DrvId::Standard(s) => BusId::Standard(BusStd::new(s.as_raw())?),
+            DrvId::Extended(e) => BusId::Extended(BusExt::new(e.as_raw())?),
+        };
+        if f.is_remote_frame() {
+            BusFrame::new_remote(id, f.dlc())
+        } else {
+            BusFrame::new(id, f.data())
+        }
+    }
+
+    /// A frame from the protocol crate, as the controller wants it.
+    pub fn to_driver(f: &BusFrame) -> Option<DrvFrame> {
+        let id = match f.id() {
+            BusId::Standard(s) => DrvId::Standard(DrvStd::new(s.as_raw())?),
+            BusId::Extended(e) => DrvId::Extended(DrvExt::new(e.as_raw())?),
+        };
+        if f.is_remote_frame() {
+            DrvFrame::new_remote(id, f.dlc())
+        } else {
+            DrvFrame::new(id, f.data())
+        }
+    }
+}
+
 /// This display's address on the bus, fixed at build time. The master uses it
 /// to target over-the-air updates at one node instead of all of them.
 const NODE_ADDR: u8 = 0x07;
@@ -164,13 +210,17 @@ fn main() -> ! {
         ws.write(brightness(once(wheel(0)), 32)).unwrap();
         // Ask only for what has not been acknowledged yet, eight IDs a frame.
         for req in sub.request() {
-            can.send_message(req).ok();
+            if let Some(req) = seam::to_driver(&req) {
+                can.send_message(req).ok();
+            }
         }
         // Collect acks for a moment before asking again.
         let deadline = timer.get_counter().ticks().wrapping_add(20_000);
         while timer.get_counter().ticks() < deadline {
             if let Ok(frame) = can.read_message() {
-                sub.feed(&frame);
+                if let Some(frame) = seam::to_bus(&frame) {
+                    sub.feed(&frame);
+                }
             }
         }
     }
@@ -192,12 +242,19 @@ fn main() -> ! {
                 // Nothing waiting, or a controller error: try again.
                 Err(Error::NoMessage) | Err(_) => continue,
             };
+            // The controller's frame becomes the crate's once, here, and
+            // everything below this line is portable.
+            let Some(frame) = seam::to_bus(&frame) else {
+                continue;
+            };
             if feed_frame(&frame).is_ok() {
                 continue;
             }
             // Not a gauge: it may be part of an update aimed at this node.
             if let Some(reply) = ota.feed(&frame) {
-                can.send_message(reply).ok();
+                if let Some(reply) = seam::to_driver(&reply) {
+                    can.send_message(reply).ok();
+                }
             }
         }
 

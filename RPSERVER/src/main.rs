@@ -38,6 +38,52 @@ use rp2040_hal as hal;
 use smart_leds::{brightness, SmartLedsWrite, RGB8};
 use ws2812_pio::Ws2812;
 
+/// The driver's frame type and the protocol crate's, converted at the seam.
+///
+/// `mcp2515` speaks the CAN traits from `embedded-hal` 0.2 and `cogware_can`
+/// speaks `embedded-can` 0.4. They describe the same eleven bits and the same
+/// eight bytes, and share no types at all, so this is where the two
+/// vocabularies meet -- and the only place in this program that knows which
+/// controller is fitted.
+///
+/// That the crate has a frame of its own is what makes the rest of the loop
+/// portable: a board with a different controller rewrites this module and
+/// nothing else.
+mod seam {
+    use cogware_can::CanFrame as BusFrame;
+    use embedded_can::{ExtendedId as BusExt, Frame as _, Id as BusId, StandardId as BusStd};
+    use embedded_hal_0_2::can::{
+        ExtendedId as DrvExt, Frame as _, Id as DrvId, StandardId as DrvStd,
+    };
+    use mcp2515::frame::CanFrame as DrvFrame;
+
+    /// A frame off the controller, as the protocol crate wants it.
+    pub fn to_bus(f: &DrvFrame) -> Option<BusFrame> {
+        let id = match f.id() {
+            DrvId::Standard(s) => BusId::Standard(BusStd::new(s.as_raw())?),
+            DrvId::Extended(e) => BusId::Extended(BusExt::new(e.as_raw())?),
+        };
+        if f.is_remote_frame() {
+            BusFrame::new_remote(id, f.dlc())
+        } else {
+            BusFrame::new(id, f.data())
+        }
+    }
+
+    /// A frame from the protocol crate, as the controller wants it.
+    pub fn to_driver(f: &BusFrame) -> Option<DrvFrame> {
+        let id = match f.id() {
+            BusId::Standard(s) => DrvId::Standard(DrvStd::new(s.as_raw())?),
+            BusId::Extended(e) => DrvId::Extended(DrvExt::new(e.as_raw())?),
+        };
+        if f.is_remote_frame() {
+            DrvFrame::new_remote(id, f.dlc())
+        } else {
+            DrvFrame::new(id, f.data())
+        }
+    }
+}
+
 #[link_section = ".boot2"]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GD25Q64CS;
@@ -212,8 +258,15 @@ fn can_out(mut can: Can) -> ! {
         // else on the bus yields no acks and is left alone.
         match can.read_message() {
             Ok(frame) => {
-                for ack in displays.feed(&frame) {
-                    can.send_message(ack).ok();
+                // Converted at the seam, both ways. A frame the controller
+                // produced that this crate cannot represent is dropped rather
+                // than guessed at; nothing on this bus can produce one.
+                if let Some(frame) = seam::to_bus(&frame) {
+                    for ack in displays.feed(&frame) {
+                        if let Some(ack) = seam::to_driver(&ack) {
+                            can.send_message(ack).ok();
+                        }
+                    }
                 }
                 continue;
             }
@@ -225,7 +278,9 @@ fn can_out(mut can: Can) -> ! {
         // this ECU never supplies yields no frame, so displays can tell
         // "not supported" from "zero".
         for frame in displays.broadcast() {
-            can.send_message(frame).ok();
+            if let Some(frame) = seam::to_driver(&frame) {
+                can.send_message(frame).ok();
+            }
         }
     }
 }
