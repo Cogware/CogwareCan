@@ -3,8 +3,8 @@
 
 use cogware_can::subscribe::*;
 use cogware_can::*;
-use embedded_hal_0_2::can::Frame;
-use mcp2515::frame::CanFrame;
+use embedded_can::Frame;
+use cogware_can::CanFrame;
 
 mod common;
 use common::bus;

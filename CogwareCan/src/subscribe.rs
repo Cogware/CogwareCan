@@ -27,8 +27,8 @@
 
 use crate::protocol::{ack_frame, is_ack, is_request, request_frame};
 use crate::{frame_for, gauge_by_id};
-use embedded_hal_0_2::can::Frame;
-use mcp2515::frame::CanFrame;
+use embedded_can::Frame;
+use crate::frame::CanFrame;
 
 /// Gauge IDs that fit in one request frame.
 pub const IDS_PER_FRAME: usize = 8;
