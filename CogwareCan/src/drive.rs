@@ -108,7 +108,12 @@ impl Car {
     pub fn reading(&self, id: u16) -> Option<i32> {
         let spec = gauge_by_id(id)?;
         let physical = self.physical(spec)?;
-        Some((physical * spec.unit.scale as f32).round() as i32)
+        let scaled = physical * spec.unit.scale as f32;
+        // Rounded by hand: `f32::round` is std and this crate is not. Half
+        // away from zero, so a reading below freezing rounds the same way one
+        // above it does rather than towards it.
+        let half = if scaled < 0.0 { -0.5 } else { 0.5 };
+        Some((scaled + half) as i32)
     }
 
     /// Write every gauge this simulates into the table.
@@ -306,5 +311,16 @@ mod tests {
             "coolant reads {coolant} in tenths"
         );
         assert!(car.reading(0xFFFF).is_none(), "and an unknown id is none");
+    }
+
+    #[test]
+    fn a_reading_below_zero_rounds_away_from_zero_too() {
+        // Temperatures are the signed ones, and a round that always went up
+        // would bias every cold reading warm.
+        let mut car = Car::new();
+        car.intake = -4.26;
+        assert_eq!(car.reading(0x25), Some(-43), "tenths of a degree");
+        car.intake = 4.26;
+        assert_eq!(car.reading(0x25), Some(43));
     }
 }
