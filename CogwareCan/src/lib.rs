@@ -4,8 +4,8 @@
 //!
 //! Server side (ECU in, CAN out):
 //! ```ignore
-//! speeduino::parse_n(&uart_packet)?;          // serial ECU bytes -> gauges
-//! haltech::SOURCE.feed_default(&ecu_frame);   // CAN-broadcast ECU -> gauges
+//! ingest(&frame);                            // any ECU or OBD2 -> gauges
+//! speeduino::parse_n(&uart_packet)?;         // serial ECU bytes -> gauges
 //! if let Some(f) = frame_for(Gauge::Rpm.id()) // gauge -> CAN frame
 //!     { can.send_message(f)?; }
 //! ```
@@ -13,10 +13,20 @@
 //! Display side (CAN in, gauges out):
 //! ```ignore
 //! feed_frame(&frame)?;                       // CAN frame -> gauge
-//! let rpm = RPM.get_or(0);                   // canonical units, see `Unit`
+//! let rpm = RPM.raw();                       // counts, or NO_DATA if unfed
 //! let clt = CLNT.as_f32();                   // 87.5 for 87.5 °C, None if unset
 //! let psi = MAP.to(Unit::PSI);               // unit conversion, see `units`
 //! ```
+//!
+//! # One table, whatever is feeding it
+//!
+//! The gauge table is the whole vocabulary of the car, and nothing in it
+//! belongs to a particular ECU. [`ingest`] routes a frame by its ID, so
+//! whichever source is attached fills every channel it can send and needs no
+//! configuring to do it; a second source -- a GPS receiver, a tank float on a
+//! GPIO -- writes the gauges the first one cannot, straight into the same
+//! table. What nothing filled reads as [`NO_DATA`], which is how a display
+//! tells an absent source from a sensor sitting at zero. See `ingest`.
 //!
 //! Adding an ECU: one new module holding a `CanSource` table (CAN broadcast)
 //! or a `Field` table plus a packet parser (serial). See `decode`. OBD2 is
@@ -35,6 +45,26 @@
 //! `config` is the one module that is not about the bus: it describes the
 //! settings a display holds well enough for an editor to render them, and
 //! packs them into the blob `xfer` carries as `kind::CONFIG`.
+//!
+//! # Which controller a board has is the board's business
+//!
+//! This crate names no driver and touches no hardware. It owns its frame
+//! type, [`CanFrame`], and every function above takes or returns that one
+//! type; a board converts once, at its driver, with [`CanFrame::to_frame`]
+//! and [`CanFrame::from_frame`]. Both sides of that conversion are stated as
+//! [`embedded_can::Frame`], so a controller wired over SPI, one built into
+//! the chip, and a test double are all equally acceptable and none of them
+//! appears in this crate.
+//!
+//! That is deliberate rather than tidiness. A crate that handed back one
+//! driver's frame type would force every board onto that driver whatever
+//! controller the board actually has, and changing a node's controller would
+//! mean changing the protocol crate every other node shares.
+//!
+//! [`link`] carries the other half: [`Link`], the two calls a node's main
+//! loop makes of a controller, and [`NbLink`], which turns anything speaking
+//! [`embedded_can::nb::Can`] into one. A driver with a blocking or bespoke
+//! API gets a short newtype in the board's own crate; `link` shows the shape.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -43,20 +73,30 @@ pub mod config;
 pub mod crc;
 pub mod decode;
 pub mod ecumaster;
+pub mod frame;
 mod gauge;
 pub mod haltech;
+pub mod blink;
 pub mod indicators;
+pub mod ingest;
+pub mod link;
 pub mod maxxecu;
 pub mod megasquirt;
 pub mod obd2;
+pub mod pack;
 pub mod rusefi;
 pub mod speeduino;
 pub mod subscribe;
 pub mod units;
+pub mod wire;
 pub mod xfer;
 
 pub use decode::CanSource;
+pub use frame::CanFrame;
 pub use gauge::*;
+pub use pack::Wire;
+pub use ingest::{ingest, Fed};
+pub use link::{Link, NbLink, RecvError, SendError};
 pub use units::{Quantity, Reading, Unit};
 
 /// Every CAN-broadcast ECU this crate understands. A server that does not
@@ -70,8 +110,7 @@ pub static CAN_SOURCES: &[&CanSource] = &[
     &ecumaster::SOURCE,
 ];
 
-use embedded_hal_0_2::can::{Frame, Id, StandardId};
-use mcp2515::frame::CanFrame;
+use embedded_can::{Frame, Id, StandardId};
 
 /// The CAN ID map of the display bus.
 ///
