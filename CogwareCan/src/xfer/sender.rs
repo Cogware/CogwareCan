@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Master side of a transfer: turn an image into frames and track replies.
 
-use super::{Cmd, Image, Status, BLOCK_LEN, CMD_ID, DATA_ID, REPLY_ID};
+use super::{check, Cmd, Image, Status, BLOCK_LEN, CMD_ID, DATA_ID, REPLY_ID};
 use crate::protocol::{frame, id_of, NODE_BROADCAST};
-use embedded_hal_0_2::can::Frame;
-use mcp2515::frame::CanFrame;
+use crate::frame::CanFrame;
+use embedded_can::Frame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TxState {
@@ -26,33 +26,96 @@ pub enum TxState {
     Failed(Status),
 }
 
+/// Where a sender takes the image from.
+///
+/// A slice is the obvious one and is implemented below. The other is a window
+/// onto an image too large to hold at once: a master with a few hundred
+/// kilobytes of memory cannot keep a firmware image, and does not have to —
+/// a transfer never looks further back than the window it is checkpointing.
+// `len` here is the size of an image, not the count of a collection, and an
+// image of no bytes is refused before a sender is built. An `is_empty` would
+// be a question nothing asks.
+#[allow(clippy::len_without_is_empty)]
+pub trait Source {
+    /// Length of the whole image.
+    fn len(&self) -> u32;
+
+    /// CRC-32 of the whole image.
+    ///
+    /// Known before the last byte is sent, because whoever supplied the image
+    /// computed it. A sender streaming an image it has never seen whole
+    /// cannot work this out for itself.
+    fn crc(&self) -> u32;
+
+    /// Copy `out.len()` bytes from `offset`, returning how many were there.
+    ///
+    /// Short of what was asked means the source has not caught up, and the
+    /// sender waits rather than sending a short block: every block but the
+    /// last is a whole one, and the rewind arithmetic depends on it.
+    fn read(&mut self, offset: u32, out: &mut [u8]) -> usize;
+}
+
+impl Source for &[u8] {
+    fn len(&self) -> u32 {
+        <[u8]>::len(self) as u32
+    }
+
+    fn crc(&self) -> u32 {
+        crate::crc::crc32(self)
+    }
+
+    fn read(&mut self, offset: u32, out: &mut [u8]) -> usize {
+        let start = (offset as usize).min(<[u8]>::len(self));
+        let end = (start + out.len()).min(<[u8]>::len(self));
+        out[..end - start].copy_from_slice(&self[start..end]);
+        end - start
+    }
+}
+
+/// Checkpoints in a row that may deliver nothing before a transfer is given
+/// up on.
+///
+/// A block the far end refuses is sent again, which is what carries an image
+/// across a bus that drops one now and then. On a bus that is broken rather
+/// than lossy the same block goes back and forth for ever, so the two ends
+/// have to agree to stop: enough attempts to ride out a bad patch, few enough
+/// that a wall is hit in seconds rather than never.
+const STALL_LIMIT: u16 = 32;
+
 /// Master side of a transfer.
-pub struct Sender<'a> {
+pub struct Sender<S> {
     node: u8,
-    image: &'a [u8],
+    source: S,
+    size: u32,
     kind: u8,
     slot: u8,
     window: u16,
     replies_needed: u8,
     state: TxState,
     seq: u16,
-    offset: usize,
+    offset: u32,
     in_window: u16,
     replies: u8,
     rewind_to: Option<u16>,
-    blocks: usize,
+    blocks: u32,
     crc: u32,
+    confirmed: u32,
+    /// Checkpoints since the far end last took delivery of anything new.
+    stalled: u16,
 }
 
-impl<'a> Sender<'a> {
-    /// Push `image` (tagged `kind`, see the `kind` module) to `node`, or to
-    /// all nodes with `NODE_BROADCAST`. `window` is blocks between
-    /// checkpoints; `replies_needed` is how many nodes must answer each
-    /// checkpoint (1 for a single node, the node count for broadcast).
-    pub fn new(node: u8, image: &'a [u8], kind: u8, window: u16, replies_needed: u8) -> Self {
+impl<S: Source> Sender<S> {
+    /// Push the image in `source` (tagged `kind`, see the `kind` module) to
+    /// `node`, or to all nodes with `NODE_BROADCAST`. `window` is blocks
+    /// between checkpoints; `replies_needed` is how many nodes must answer
+    /// each checkpoint (1 for a single node, the node count for broadcast).
+    pub fn new(node: u8, source: S, kind: u8, window: u16, replies_needed: u8) -> Self {
+        let size = source.len();
+        let crc = source.crc();
         Sender {
             node,
-            image,
+            source,
+            size,
             kind,
             slot: 0,
             window: window.max(1),
@@ -64,8 +127,23 @@ impl<'a> Sender<'a> {
             replies: 0,
             rewind_to: None,
             blocks: 0,
-            crc: crate::crc::crc32(image),
+            crc,
+            confirmed: 0,
+            stalled: 0,
         }
+    }
+
+    /// Give the source back, so a master can reuse the buffer behind it.
+    pub fn into_source(self) -> S {
+        self.source
+    }
+
+    /// The source, to put more of the image into.
+    ///
+    /// A master streaming an image it cannot hold owns the buffer the sender
+    /// reads from, and has to keep filling it as the host sends more.
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.source
     }
 
     /// Land the image in `slot` rather than slot 0, for a node that keeps
@@ -81,20 +159,29 @@ impl<'a> Sender<'a> {
 
     /// What this sender is pushing.
     pub fn image(&self) -> Image {
-        Image { size: self.image.len() as u32, kind: self.kind, slot: self.slot }
+        Image {
+            size: self.size,
+            kind: self.kind,
+            slot: self.slot,
+        }
     }
 
-    /// Bytes acknowledged so far and the image size.
-    pub fn progress(&self) -> (usize, usize) {
-        (self.offset, self.image.len())
+    /// Bytes the far end has acknowledged, and the image size.
+    ///
+    /// Acknowledged, not sent: a block lost on the bus rewinds the sender to
+    /// it and everything after it goes again, so bytes sent is a number that
+    /// moves both ways. Anything showing this to a person — a progress bar
+    /// most of all — needs the one that only ever climbs.
+    pub fn progress(&self) -> (u32, u32) {
+        (self.confirmed, self.size)
     }
 
-    /// Bytes acknowledged as a percentage, for `bus::Bus::update_progress`.
+    /// Acknowledged bytes as a percentage, for `bus::Bus::update_progress`.
     pub fn percent(&self) -> u8 {
-        if self.image.is_empty() {
+        if self.size == 0 {
             return 100;
         }
-        (self.offset.min(self.image.len()) * 100 / self.image.len()) as u8
+        (self.confirmed.min(self.size) as u64 * 100 / u64::from(self.size)) as u8
     }
 
     /// Call after a timeout while in a `Wait*` state to resend the last control frame.
@@ -119,7 +206,7 @@ impl<'a> Sender<'a> {
         buf[1] = cmd as u8;
         let len = match cmd {
             Cmd::Begin => {
-                buf[2..6].copy_from_slice(&(self.image.len() as u32).to_le_bytes());
+                buf[2..6].copy_from_slice(&self.size.to_le_bytes());
                 buf[6] = self.kind;
                 buf[7] = self.slot;
                 8
@@ -146,19 +233,28 @@ impl<'a> Sender<'a> {
                 self.ctrl(Cmd::Begin)
             }
             TxState::Data => {
-                if self.offset >= self.image.len() || self.in_window >= self.window {
+                if self.offset >= self.size || self.in_window >= self.window {
                     self.in_window = 0;
                     self.replies = 0;
                     self.rewind_to = None;
                     self.state = TxState::WaitCheck;
                     return self.ctrl(Cmd::Check);
                 }
-                let end = (self.offset + BLOCK_LEN).min(self.image.len());
+                let want = (self.size - self.offset).min(BLOCK_LEN as u32) as usize;
                 let mut buf = [0u8; 8];
+                let got = self.source.read(self.offset, &mut buf[2..2 + want]);
+                // Short of a whole block means the source has not caught up.
+                // Nothing is sent: every block but the last is a whole one,
+                // and the rewind below counts on that.
+                if got < want {
+                    return None;
+                }
                 buf[..2].copy_from_slice(&self.seq.to_le_bytes());
-                buf[2..2 + end - self.offset].copy_from_slice(&self.image[self.offset..end]);
-                let f = frame(DATA_ID, &buf[..2 + end - self.offset]);
-                self.offset = end;
+                // Over the sequence number as well as the payload: a block
+                // believed at the wrong offset is as bad as a wrong byte.
+                buf[2 + want] = check(&buf[..2 + want]);
+                let f = frame(DATA_ID, &buf[..3 + want]);
+                self.offset += want as u32;
                 self.seq = self.seq.wrapping_add(1);
                 self.blocks += 1;
                 self.in_window += 1;
@@ -186,7 +282,9 @@ impl<'a> Sender<'a> {
         if self.node != NODE_BROADCAST && d[0] != self.node {
             return;
         }
-        let Some(status) = Status::from_u8(d[1]) else { return };
+        let Some(status) = Status::from_u8(d[1]) else {
+            return;
+        };
         let seq = u16::from_le_bytes([d[2], d[3]]);
         match (self.state, status) {
             (TxState::WaitReady, Status::Ready) => self.count(TxState::Data),
@@ -212,11 +310,33 @@ impl<'a> Sender<'a> {
             return;
         }
         if let Some(seq) = self.rewind_to.take() {
-            let back = self.seq.wrapping_sub(seq) as usize;
+            // Nothing new got through this window. A few of these is a lossy
+            // patch; a run of them is a link that is not going to carry the
+            // image however long it is given.
+            self.stalled = self.stalled.saturating_add(1);
+            if self.stalled >= STALL_LIMIT {
+                self.state = TxState::Failed(Status::Missing);
+                return;
+            }
+            let back = u32::from(self.seq.wrapping_sub(seq));
             self.blocks = self.blocks.saturating_sub(back);
-            self.offset = (self.blocks * BLOCK_LEN).min(self.image.len());
+            self.offset = (self.blocks * BLOCK_LEN as u32).min(self.size);
             self.seq = seq;
-        } else if next == TxState::Data && self.offset >= self.image.len() {
+            // What was confirmed stays confirmed. A rewind can reach back past
+            // an earlier checkpoint, but the node did answer that checkpoint
+            // and the bytes behind it are still the ones it holds -- and a bar
+            // that walks backwards reads as a fault to whoever is watching it.
+            self.state = next;
+            return;
+        }
+        // Every target answered and none is missing anything, so what has gone
+        // out so far really is at the far end. A high-water mark, never a step
+        // back: see the rewind above.
+        if self.offset > self.confirmed {
+            self.stalled = 0;
+        }
+        self.confirmed = self.confirmed.max(self.offset);
+        if next == TxState::Data && self.offset >= self.size {
             self.state = TxState::End;
             return;
         }

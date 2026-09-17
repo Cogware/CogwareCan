@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Node side of a transfer: consume the master's frames into a `Sink`.
 
-use super::{Image, Status, Sink, CMD_ID, DATA_ID, REPLY_ID};
+use super::{check, Image, Sink, Status, CMD_ID, DATA_ID, REPLY_ID};
 use crate::crc::Crc32;
 use crate::protocol::{frame, id_of, NODE_BROADCAST};
-use embedded_hal_0_2::can::Frame;
-use mcp2515::frame::CanFrame;
+use crate::frame::CanFrame;
+use embedded_can::Frame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RxState {
@@ -25,6 +25,8 @@ pub struct Receiver<S: Sink> {
     received: u32,
     missing: Option<u16>,
     crc: Crc32,
+    gaps: u32,
+    spoilt: u32,
 }
 
 impl<S: Sink> Receiver<S> {
@@ -34,11 +36,17 @@ impl<S: Sink> Receiver<S> {
             node,
             sink,
             state: RxState::Idle,
-            image: Image { size: 0, kind: 0, slot: 0 },
+            image: Image {
+                size: 0,
+                kind: 0,
+                slot: 0,
+            },
             expected_seq: 0,
             received: 0,
             missing: None,
             crc: Crc32::new(),
+            gaps: 0,
+            spoilt: 0,
         }
     }
 
@@ -53,6 +61,25 @@ impl<S: Sink> Receiver<S> {
     /// Bytes stored so far and the declared image size.
     pub fn progress(&self) -> (u32, u32) {
         (self.received, self.image.size)
+    }
+
+    /// How many times a block has arrived out of turn since this receiver was
+    /// made.
+    ///
+    /// A gap is what makes the sender rewind, so a node counting them steadily
+    /// is one the bus is outrunning — which from the sending end looks only
+    /// like a transfer that will not get faster.
+    pub fn gaps(&self) -> u32 {
+        self.gaps
+    }
+
+    /// How many blocks arrived with a checksum that did not match.
+    ///
+    /// The bus checks a frame on the way out of the sending controller, which
+    /// is after it crossed the wires to it. This counts what that misses, and
+    /// it is the only place such a fault is visible at all.
+    pub fn spoilt(&self) -> u32 {
+        self.spoilt
     }
 
     /// What the current session is carrying, meaningless while `Idle`.
@@ -76,13 +103,27 @@ impl<S: Sink> Receiver<S> {
     }
 
     fn data(&mut self, data: &[u8]) -> Option<CanFrame> {
-        if self.state != RxState::Receiving || data.len() < 2 {
+        if self.state != RxState::Receiving || data.len() < 3 {
             return None;
         }
+        // The last byte checks the rest. A block that fails it is not trusted
+        // for anything -- not its payload and not the sequence number saying
+        // where the payload goes -- so it is dropped and asked for again, the
+        // same as one that never arrived.
+        let (body, sum) = data.split_at(data.len() - 1);
+        if check(body) != sum[0] {
+            self.spoilt = self.spoilt.saturating_add(1);
+            if self.missing.is_none() && self.received < self.image.size {
+                self.missing = Some(self.expected_seq);
+            }
+            return None;
+        }
+        let data = body;
         let seq = u16::from_le_bytes([data[0], data[1]]);
         if seq != self.expected_seq {
             if self.missing.is_none() && self.received < self.image.size {
                 self.missing = Some(self.expected_seq);
+                self.gaps = self.gaps.saturating_add(1);
             }
             return None;
         }

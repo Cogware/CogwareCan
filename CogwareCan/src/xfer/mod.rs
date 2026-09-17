@@ -24,22 +24,64 @@
 //! does that itself; the firmware owns both state machines.
 //!
 //! Node side: implement `Sink` (write to flash, a buffer, an SD card) and run
-//! a `Receiver`. Master side: run a `Sender` over the image bytes.
+//! a `Receiver`. Master side: run a `Sender` over the image bytes. A node that
+//! keeps what it is sent across a power cycle writes it through `store`, which
+//! owns the record format so that two nodes storing the same image agree.
 
 mod receiver;
 mod sender;
+pub mod store;
 
 pub use receiver::{Receiver, RxState};
-pub use sender::{Sender, TxState};
+pub use sender::{Sender, Source, TxState};
 
 pub const CMD_ID: u16 = 0x010;
 pub const DATA_ID: u16 = 0x011;
 pub const REPLY_ID: u16 = 0x012;
 /// Image bytes per data frame.
-pub const BLOCK_LEN: usize = 6;
+///
+/// Five, not six: the eighth byte of the frame is a checksum over the other
+/// seven. The bus has a fifteen-bit check of its own, but it is the *sending*
+/// controller that computes it — after the frame has crossed the wires to that
+/// controller — so a byte spoilt on the way in is signed as good and arrives
+/// looking perfect. Measured: about one block in a hundred thousand arrives
+/// wrong with every error counter on both nodes reading zero, which over an
+/// image of a hundred and forty thousand blocks is most of a firmware push
+/// thrown away. A byte per frame is the sixth of the rate that buys it back.
+pub const BLOCK_LEN: usize = 5;
+
+/// The checksum carried in the last byte of a data frame.
+///
+/// CRC-8/AUTOSAR — polynomial 0x2F, which is chosen for exactly this: a short
+/// payload on a vehicle bus. It catches every single-bit error and every burst
+/// shorter than itself, and leaves a corrupted block one chance in 256 of
+/// being believed, on top of whatever the bus already caught.
+pub fn check(bytes: &[u8]) -> u8 {
+    let mut crc = 0xFFu8;
+    for &byte in bytes {
+        crc ^= byte;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 0x80 != 0 { (crc << 1) ^ 0x2F } else { crc << 1 };
+            bit += 1;
+        }
+    }
+    crc ^ 0xFF
+}
 
 /// What an image is, so a node can refuse one it has nowhere to put.
 /// The values are part of the wire format and never change meaning.
+///
+/// Each kind also fixes what `Image::slot` counts, because a node has to know
+/// which of its own slots a number names before it can accept the `Begin`:
+///
+/// | Kind       | Slot                                               |
+/// |------------|----------------------------------------------------|
+/// | `FIRMWARE` | 0, the spare bank; a node picks which that is       |
+/// | `SCENE`    | the rig's mode index, so slot 1 is the second mode  |
+/// | `CONFIG`   | 0, because a node holds one settings blob           |
+/// | `ASSET`    | the node's own index for the asset                  |
+/// | `RIG`      | 0, because there is one rig and it is the car       |
 pub mod kind {
     /// A node firmware image, applied by the bootloader.
     pub const FIRMWARE: u8 = 1;
@@ -49,6 +91,10 @@ pub mod kind {
     pub const CONFIG: u8 = 3;
     /// A font, bitmap or other asset a scene refers to.
     pub const ASSET: u8 = 4;
+    /// The `.rig`: every display on the bus and the scene each shows in each
+    /// mode. Pushed before the scenes it names, since it is what gives a
+    /// scene slot its meaning.
+    pub const RIG: u8 = 5;
 }
 
 /// What is being transferred: how big, what it is, and which of the
@@ -131,7 +177,11 @@ pub struct BufferSink<'a> {
 
 impl<'a> BufferSink<'a> {
     pub fn new(buf: &'a mut [u8]) -> Self {
-        BufferSink { buf, len: 0, committed: false }
+        BufferSink {
+            buf,
+            len: 0,
+            committed: false,
+        }
     }
 }
 
@@ -152,5 +202,30 @@ impl Sink for BufferSink<'_> {
     }
     fn commit(&mut self, _image: Image) {
         self.committed = true;
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::check;
+
+    #[test]
+    fn the_check_matches_the_standard() {
+        // CRC-8/AUTOSAR's published check value for "123456789".
+        assert_eq!(check(b"123456789"), 0xDF);
+    }
+
+    #[test]
+    fn a_single_bit_anywhere_in_a_block_changes_it() {
+        // What it is for: one bit picked up crossing a wire.
+        let block = [0x34, 0x12, 0xDE, 0xAD, 0xBE, 0xEF, 0x55];
+        let want = check(&block);
+        for byte in 0..block.len() {
+            for bit in 0..8 {
+                let mut bad = block;
+                bad[byte] ^= 1 << bit;
+                assert_ne!(check(&bad), want, "bit {bit} of byte {byte} slipped through");
+            }
+        }
     }
 }
