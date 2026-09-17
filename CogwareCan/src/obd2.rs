@@ -12,8 +12,8 @@
 use crate::decode::{apply_fields, conv::*, Field};
 use crate::field;
 use crate::protocol::{frame, id_of};
-use embedded_hal_0_2::can::Frame;
-use mcp2515::frame::CanFrame;
+use embedded_can::Frame;
+use crate::frame::CanFrame;
 
 /// Functional request ID every ECU listens on.
 pub const REQUEST_ID: u16 = 0x7DF;

@@ -51,4 +51,8 @@ pub static SOURCE: CanSource = CanSource {
         CanFrameMap { id_offset: 3, fields: F3 },
         CanFrameMap { id_offset: 4, fields: F4 },
     ],
+    // No status bits mapped: this protocol's flag words are not documented
+    // per-bit in the material this converter was written from, and a lamp lit
+    // on a guess is worse than one left dark.
+    lamps: &[],
 };

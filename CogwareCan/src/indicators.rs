@@ -16,6 +16,26 @@
 //! if get(Indicator::CheckEngine) { .. } // display, after feed_frame
 //! for lit in displayed().iter() { draw(lit.name()); }
 //! ```
+//!
+//! # Where a lamp comes from
+//!
+//! Three places, and a display cannot tell them apart, which is the point: a
+//! lamp is a lamp whatever lit it.
+//!
+//! - The server, from a pin it can see or a reading it has judged.
+//! - A node, reporting a tell-tale wired to one of its own pins through
+//!   `bus::BusView::report_lamp`; the master applies it and broadcasts the
+//!   bank, so every display lights together and none of them decided.
+//! - A standalone ECU, from the status bits it broadcasts. Those arrive
+//!   through the converter that owns the protocol, as a `decode::Flag` table
+//!   naming the lamp each bit drives.
+//!
+//! That last one is a judgement rather than a decode -- a protocol's "speed
+//! limit active" and this table's `PitLimiter` are the same thing only
+//! because somebody decided they were -- so each converter writes its mapping
+//! out bit by bit in its own module header, the bits it deliberately leaves
+//! dark included. `rusefi` and `maxxecu` have such tables; read those before
+//! trusting a lamp to mean what its name suggests on a given car.
 
 use crate::{INDICATORS1, INDICATORS2};
 use paste::paste;

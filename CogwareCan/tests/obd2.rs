@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! OBD2 mode 01 request/response.
 
+use cogware_can::CanFrame;
 use cogware_can::obd2::*;
 use cogware_can::*;
-use embedded_hal_0_2::can::Frame;
+use embedded_can::Frame;
 
 mod common;
 use common::bus;
@@ -12,7 +13,7 @@ fn close(a: Option<f32>, b: f32) -> bool {
     a.is_some_and(|a| (a - b).abs() < 1.0)
 }
 
-fn response(pid: u8, data: &[u8]) -> mcp2515::frame::CanFrame {
+fn response(pid: u8, data: &[u8]) -> CanFrame {
     let mut d = vec![2 + data.len() as u8, 0x41, pid];
     d.extend_from_slice(data);
     d.resize(8, 0x55);

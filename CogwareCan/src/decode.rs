@@ -19,10 +19,26 @@
 //! ```
 //!
 //! A serial ECU uses the same `Field` table with `apply_fields`; see `speeduino`.
+//!
+//! # Status bits
+//!
+//! Most standalones broadcast a byte or two of flags -- rev limit reached,
+//! fan on, knock heard -- which are lamps rather than readings. Those go in a
+//! second table, `lamps`, one [`Flag`] per bit naming the [`Indicator`] it
+//! drives, and the converter writes them through `indicators` exactly as a
+//! server would.
+//!
+//! Every such mapping is written out bit by bit in the converter that owns
+//! it, because it is a judgement and not a decode: a protocol's "speed limit
+//! active" and this crate's `PitLimiter` are one person's decision that the
+//! two mean the same thing, and the next person to read it deserves to see
+//! that decision rather than infer it. Bits with no lamp worth lighting are
+//! listed there too, as bits deliberately left alone.
 
+use crate::frame::CanFrame;
 use crate::gauge::GaugeData;
-use embedded_hal_0_2::can::{Frame, Id};
-use mcp2515::frame::CanFrame;
+use crate::indicators::{self, Indicator, IndicatorSet};
+use embedded_can::{Frame, Id};
 
 /// How a raw channel is packed in a byte buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +119,63 @@ pub fn apply_fields(fields: &[Field], data: &[u8]) -> usize {
     written
 }
 
+/// One status bit: where it sits, and the lamp it drives.
+pub struct Flag {
+    pub off: usize,
+    /// Bit position within that byte, 0 is least significant.
+    pub bit: u8,
+    pub lamp: Indicator,
+}
+
+/// Build a `Flag` from `(offset, bit, Indicator variant)`.
+#[macro_export]
+macro_rules! flag {
+    ($off:literal, $bit:literal, $lamp:ident) => {
+        $crate::decode::Flag {
+            off: $off,
+            bit: $bit,
+            lamp: $crate::indicators::Indicator::$lamp,
+        }
+    };
+}
+
+/// The status bits carried by one CAN frame of a broadcast protocol.
+pub struct LampFrame {
+    /// Frame ID minus the protocol's base ID.
+    pub id_offset: u16,
+    pub flags: &'static [Flag],
+}
+
+/// Light or extinguish every lamp this frame speaks for. Returns how many
+/// lamps were written.
+///
+/// A bit that is clear puts its lamp out, not just leaves it: the ECU is the
+/// authority on its own state, and a lamp that only ever lit would stay on
+/// after the condition passed.
+///
+/// Gathered before being written because two bits may drive one lamp -- a car
+/// with two cooling fans has one fan lamp -- and writing as it went would let
+/// the second bit put out what the first one lit.
+pub fn apply_flags(flags: &[Flag], data: &[u8]) -> usize {
+    let mut lit = IndicatorSet::new();
+    let mut spoken_for = IndicatorSet::new();
+    for f in flags {
+        let Some(byte) = data.get(f.off) else {
+            continue;
+        };
+        spoken_for.set(f.lamp, true);
+        if byte & (1 << f.bit) != 0 {
+            lit.set(f.lamp, true);
+        }
+    }
+    let mut written = 0;
+    for lamp in spoken_for.iter() {
+        indicators::set(lamp, lit.contains(lamp));
+        written += 1;
+    }
+    written
+}
+
 /// The channels carried by one CAN frame of a broadcast protocol.
 pub struct CanFrameMap {
     /// Frame ID minus the protocol's base ID.
@@ -116,6 +189,10 @@ pub struct CanSource {
     /// Base ID the ECU ships with; pass a different one to `feed` if reconfigured.
     pub default_base: u16,
     pub frames: &'static [CanFrameMap],
+    /// Status bits, kept apart from the readings because they are lamps and
+    /// not numbers, and because the mapping from a protocol's flag to one of
+    /// this crate's lamps is a judgement that wants stating in one place.
+    pub lamps: &'static [LampFrame],
 }
 
 impl CanSource {
@@ -127,8 +204,22 @@ impl CanSource {
             Id::Extended(e) => u16::try_from(e.as_raw()).ok()?,
         };
         let offset = id.checked_sub(base)?;
-        let map = self.frames.iter().find(|m| m.id_offset == offset)?;
-        Some(apply_fields(map.fields, &frame.data()[..frame.dlc()]))
+        let data = &frame.data()[..frame.dlc()];
+        let readings = self.frames.iter().find(|m| m.id_offset == offset);
+        let lamps = self.lamps.iter().find(|m| m.id_offset == offset);
+        // A frame carrying only status bits is still ours, and one carrying
+        // both is counted once for each thing it wrote.
+        if readings.is_none() && lamps.is_none() {
+            return None;
+        }
+        let mut written = 0;
+        if let Some(map) = readings {
+            written += apply_fields(map.fields, data);
+        }
+        if let Some(map) = lamps {
+            written += apply_flags(map.flags, data);
+        }
+        Some(written)
     }
 
     /// Decode with the protocol's default base ID.
@@ -136,9 +227,20 @@ impl CanSource {
         self.feed(self.default_base, frame)
     }
 
-    /// Every CAN ID this protocol uses at `base`.
+    /// Every CAN ID this protocol uses at `base`, status-bit frames included
+    /// and each ID given once.
+    ///
+    /// A frame can carry readings and status bits together, so it appears in
+    /// both tables; a caller setting up hardware filters wants the ID once,
+    /// not once per reason.
     pub fn ids(&self, base: u16) -> impl Iterator<Item = u16> + '_ {
-        self.frames.iter().map(move |m| base + m.id_offset)
+        let readings = self.frames.iter().map(move |m| base + m.id_offset);
+        let lamps_only = self
+            .lamps
+            .iter()
+            .filter(|l| !self.frames.iter().any(|m| m.id_offset == l.id_offset))
+            .map(move |m| base + m.id_offset);
+        readings.chain(lamps_only)
     }
 }
 
