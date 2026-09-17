@@ -38,6 +38,14 @@ pub enum Quantity {
     Distance,
     Data,
     Volume,
+    /// Mass of air or fuel, as a cylinder filling or a tank emptying.
+    Mass,
+    /// Mass per unit time: airflow into the engine, fuel out of the tank.
+    MassFlow,
+    /// Volume per unit time, which is how a fuel rate is usually quoted.
+    VolumeFlow,
+    /// Acceleration, in the units a driver reads: multiples of gravity.
+    Acceleration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -80,6 +88,15 @@ impl Unit {
     pub const KILOMETRES: Unit = Unit::base("km", 10, Quantity::Distance);
     pub const BYTES: Unit = Unit::base("B", 1, Quantity::Data);
     pub const LITRES: Unit = Unit::base("L", 10, Quantity::Volume);
+    /// Milligrams: a cylinder's air charge is a fraction of a gram, and fuel
+    /// burned over a trip is thousands, so the small end sets the scale.
+    pub const GRAMS: Unit = Unit::base("g", 1000, Quantity::Mass);
+    /// Airflow is quoted in kg/h and fuel flow in g/s; this is the base and
+    /// `G_PER_S` converts, so a display can ask for either.
+    pub const KG_PER_H: Unit = Unit::base("kg/h", 100, Quantity::MassFlow);
+    pub const L_PER_H: Unit = Unit::base("L/h", 100, Quantity::VolumeFlow);
+    /// Multiples of standard gravity.
+    pub const G_FORCE: Unit = Unit::base("G", 100, Quantity::Acceleration);
 
     // Display-only units, reachable through conversion.
     pub const FAHRENHEIT: Unit = Unit::derived("°F", Quantity::Temperature, 5.0 / 9.0, -160.0 / 9.0);
@@ -95,6 +112,10 @@ impl Unit {
     pub const MINUTES: Unit = Unit::derived("min", Quantity::Time, 60.0, 0.0);
     pub const GALLONS_US: Unit = Unit::derived("gal", Quantity::Volume, 3.785_411_8, 0.0);
     pub const GALLONS_UK: Unit = Unit::derived("gal (UK)", Quantity::Volume, 4.546_09, 0.0);
+    pub const KILOGRAMS: Unit = Unit::derived("kg", Quantity::Mass, 1000.0, 0.0);
+    /// One gram per second is 3.6 kilograms per hour.
+    pub const G_PER_S: Unit = Unit::derived("g/s", Quantity::MassFlow, 3.6, 0.0);
+    pub const M_PER_S2: Unit = Unit::derived("m/s²", Quantity::Acceleration, 1.0 / 9.806_65, 0.0);
 
     /// Convert a value expressed in `self` to `target`, or `None` across dimensions.
     pub fn convert(&self, value: f32, target: Unit) -> Option<f32> {

@@ -10,65 +10,32 @@
 //! reading of 87.5 °C is stored as 875 because `Unit::CELSIUS.scale == 10`.
 //! Use `GaugeData::as_f32` when a float is wanted for display.
 
+use crate::pack::Wire;
 use crate::units::{Reading, Unit};
 use core::cell::Cell;
 use critical_section::Mutex;
-use embedded_hal_0_2::can::{Frame, Id, StandardId};
-use mcp2515::frame::CanFrame;
+use embedded_can::{Frame, Id, StandardId};
+use crate::frame::CanFrame;
 use paste::paste;
 
-/// How a value is packed into a CAN frame: little endian, exactly this many bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Wire {
-    U8,
-    I8,
-    U16,
-    I16,
-    I32,
-}
-
-impl Wire {
-    /// How many bytes this width occupies in a frame's payload.
-    // No `is_empty` beside it: a width is one, two or four bytes and never
-    // none, so the method clippy asks for could only ever return false.
-    #[allow(clippy::len_without_is_empty)]
-    pub const fn len(self) -> usize {
-        match self {
-            Wire::U8 | Wire::I8 => 1,
-            Wire::U16 | Wire::I16 => 2,
-            Wire::I32 => 4,
-        }
-    }
-
-    /// Pack `value` into `out` and return how many bytes were used.
-    /// Values outside the wire range are clamped rather than wrapped.
-    pub fn encode(self, value: i32, out: &mut [u8; 4]) -> usize {
-        let n = self.len();
-        let clamped = match self {
-            Wire::U8 => value.clamp(0, u8::MAX as i32),
-            Wire::I8 => value.clamp(i8::MIN as i32, i8::MAX as i32),
-            Wire::U16 => value.clamp(0, u16::MAX as i32),
-            Wire::I16 => value.clamp(i16::MIN as i32, i16::MAX as i32),
-            Wire::I32 => value,
-        };
-        out[..n].copy_from_slice(&clamped.to_le_bytes()[..n]);
-        n
-    }
-
-    /// Unpack a payload. Returns `None` unless `data.len()` matches exactly.
-    pub fn decode(self, data: &[u8]) -> Option<i32> {
-        if data.len() != self.len() {
-            return None;
-        }
-        Some(match self {
-            Wire::U8 => data[0] as i32,
-            Wire::I8 => data[0] as i8 as i32,
-            Wire::U16 => u16::from_le_bytes([data[0], data[1]]) as i32,
-            Wire::I16 => i16::from_le_bytes([data[0], data[1]]) as i32,
-            Wire::I32 => i32::from_le_bytes([data[0], data[1], data[2], data[3]]),
-        })
-    }
-}
+/// The value a gauge reads as when nothing has fed it.
+///
+/// Every reader that can carry absence should use [`GaugeData::get`] and its
+/// `Option`. This exists for the ones that cannot: a scene binding wanting a
+/// plain number, a debug view printing a column, a frame payload with a fixed
+/// width. Those need one agreed value meaning "no source is filling this", and
+/// this is it.
+///
+/// It is deliberately absurd rather than merely unusual. Gauges are fixed
+/// point, so a reader that mistakes it for a reading gets -88,927,571.4 as a
+/// temperature or a pressure -- a number no sensor fault produces and nobody
+/// mistakes for data. A tidier sentinel like zero or -1 is a real reading for
+/// half the table: zero rpm is a stalled engine, -1 °C is a cold morning.
+///
+/// The sentinel is never stored. [`GaugeData::set`] treats it as "I have no
+/// reading for this channel" and stores absence, so a gauge holds a reading or
+/// holds nothing, and this value only ever appears on the way out.
+pub const NO_DATA: i32 = 0xCAFE_BABE_u32 as i32;
 
 /// Which kind of source can populate a gauge. A display should only rely on
 /// a gauge being present if the attached source is at least this specific.
@@ -90,13 +57,43 @@ pub enum Source {
     Gps,
 }
 
-pub struct GaugeData {
+/// Everything about a gauge that never changes: what it is called, where it
+/// sits on the bus, how it is packed, what it means.
+///
+/// Split from the value so that it can live in flash. A gauge holding a value
+/// needs interior mutability, which forces the whole static into RAM; this
+/// half has none, so the linker puts it with the other constants and the RAM
+/// cost of a gauge falls from forty-eight bytes to sixteen.
+///
+/// That is not tidiness. The table is the vocabulary of the car and it grows
+/// every time an ECU is added; on a part with under two hundred kilobytes of
+/// internal RAM shared between the radio's heap, two stacks and everything
+/// static, the difference decides whether a build boots.
+///
+/// Reached through `Deref` on [`GaugeData`], so `gauge.name` and `gauge.unit`
+/// read as though the fields were still there.
+pub struct GaugeSpec {
     pub name: &'static str,
     pub id: u16,
     pub wire: Wire,
     pub unit: Unit,
     pub source: Source,
+}
+
+pub struct GaugeData {
+    spec: &'static GaugeSpec,
     value: Mutex<Cell<Option<i32>>>,
+    /// How many times this gauge has been written.
+    ///
+    /// A count rather than a time, because this crate has no clock and the
+    /// boards it runs on do not agree about what one would be. A reader that
+    /// remembers the count and looks again later learns the one thing a value
+    /// cannot tell it: whether anything is still writing this gauge.
+    ///
+    /// That distinction is the whole of knowing a dead sender from a steady
+    /// one. A coolant sensor that has failed holds its last reading for ever,
+    /// and the number looks perfectly reasonable.
+    writes: Mutex<Cell<u32>>,
 }
 
 impl core::fmt::Debug for GaugeData {
@@ -119,15 +116,26 @@ pub enum FrameError {
     BadLength { expected: usize, got: usize },
 }
 
-impl GaugeData {
+impl core::ops::Deref for GaugeData {
+    type Target = GaugeSpec;
+    fn deref(&self) -> &GaugeSpec {
+        self.spec
+    }
+}
+
+impl GaugeSpec {
     pub const fn new(name: &'static str, id: u16, wire: Wire, unit: Unit, source: Source) -> Self {
+        GaugeSpec { name, id, wire, unit, source }
+    }
+}
+
+impl GaugeData {
+    /// A gauge holding nothing, described by a spec that lives in flash.
+    pub const fn new(spec: &'static GaugeSpec) -> Self {
         GaugeData {
-            name,
-            id,
-            wire,
-            unit,
-            source,
+            spec,
             value: Mutex::new(Cell::new(None)),
+            writes: Mutex::new(Cell::new(0)),
         }
     }
 
@@ -138,6 +146,15 @@ impl GaugeData {
 
     pub fn get_or(&self, default: i32) -> i32 {
         self.get().unwrap_or(default)
+    }
+
+    /// The fixed-point value as a reader that cannot carry absence sees it:
+    /// the counts, or [`NO_DATA`] when nothing has fed this gauge.
+    ///
+    /// This is the read for a display: it never has to ask whether a source
+    /// is attached, only whether the number it got is the sentinel.
+    pub fn raw(&self) -> i32 {
+        self.get_or(NO_DATA)
     }
 
     /// Value in physical units (counts divided by `unit.scale`).
@@ -156,8 +173,32 @@ impl GaugeData {
         self.reading()?.to(target)
     }
 
+    /// Store a reading, or [`NO_DATA`] to say this source has none.
+    ///
+    /// Either way it counts as a write. A source that keeps saying it has
+    /// nothing for a channel is still a source that is running, and that is
+    /// a different thing from one that has died -- which is the whole
+    /// question `writes` exists to answer. [`clear`](Self::clear) is the
+    /// other case: the link dropped and nothing at all is being said.
     pub fn set(&self, value: i32) {
-        critical_section::with(|cs| self.value.borrow(cs).set(Some(value)));
+        critical_section::with(|cs| {
+            let stored = if value == NO_DATA { None } else { Some(value) };
+            self.value.borrow(cs).set(stored);
+            let writes = self.writes.borrow(cs);
+            // Wrapping, and that is fine: a reader compares for difference,
+            // never for order, so the only way round is the one in a hundred
+            // million where a gauge is written exactly 2^32 times between two
+            // looks.
+            writes.set(writes.get().wrapping_add(1));
+        });
+    }
+
+    /// How many times this gauge has been written since the board started.
+    ///
+    /// Compare it with what it was a moment ago: unchanged means nothing is
+    /// writing this gauge, whatever its value says.
+    pub fn writes(&self) -> u32 {
+        critical_section::with(|cs| self.writes.borrow(cs).get())
     }
 
     pub fn clear(&self) {
@@ -192,9 +233,18 @@ impl GaugeData {
 /// `Gauge` enum with matching discriminants, ID lookup, and `ALL_GAUGES`.
 macro_rules! gauges {
     ($($name:ident = $id:literal : $wire:ident, $unit:ident, $source:ident;)+) => {
+        // The specs go in their own module so that a gauge called, say,
+        // `RPM` and its spec can share a name without colliding, and so that
+        // nothing outside reaches for a spec when it wants the gauge.
+        mod spec {
+            use super::*;
+            $(
+                pub static $name: GaugeSpec = GaugeSpec::new(
+                    stringify!($name), $id, Wire::$wire, Unit::$unit, Source::$source);
+            )+
+        }
         $(
-            pub static $name: GaugeData =
-                GaugeData::new(stringify!($name), $id, Wire::$wire, Unit::$unit, Source::$source);
+            pub static $name: GaugeData = GaugeData::new(&spec::$name);
             // The client request protocol carries gauge IDs as single bytes.
             const _: () = assert!($id <= 0xFF, "gauge ID must fit in one request byte");
         )+
@@ -339,4 +389,99 @@ gauges! {
     // Speed over ground, which is not VSS: it survives a wheel-speed fault
     // and disagrees with it under wheelspin.
     GPS_SPEED           = 0x7E: U16, KMH,           Gps;
+    // Exhaust gas temperature per cylinder. EGT1 sits back at 0x72 with the
+    // other common channels; an engine with one probe uses that and stops
+    // there. These are for the sources that send a full set, where the point
+    // is the disagreement between them rather than any one number.
+    EGT2                = 0x7F: I16, CELSIUS,       Standalone;
+    EGT3                = 0x80: I16, CELSIUS,       Standalone;
+    EGT4                = 0x81: I16, CELSIUS,       Standalone;
+    EGT5                = 0x82: I16, CELSIUS,       Standalone;
+    EGT6                = 0x83: I16, CELSIUS,       Standalone;
+    EGT7                = 0x84: I16, CELSIUS,       Standalone;
+    EGT8                = 0x85: I16, CELSIUS,       Standalone;
+
+    // Knock. A standalone knows far more about this than a lamp can say, and
+    // it is the one thing a driver cannot hear over the engine.
+    KNOCK_LEVEL         = 0x86: U16, RAW,           Standalone;
+    // Timing the ECU has pulled back because of knock, as a signed angle.
+    KNOCK_RETARD        = 0x87: I16, DEGREES,       Standalone;
+    KNOCK_COUNT         = 0x88: U16, RAW,           Standalone;
+    // Which cylinder knocked last, 1-based; 0 means none has.
+    KNOCK_CYL           = 0x89: U8,  RAW,           Standalone;
+    // Per-cylinder knock level. One cylinder well above the others is a
+    // different fault from all eight climbing together, and the sum of them
+    // cannot tell the two apart.
+    KNOCK1              = 0x8A: I8,  RAW,           Standalone;
+    KNOCK2              = 0x8B: I8,  RAW,           Standalone;
+    KNOCK3              = 0x8C: I8,  RAW,           Standalone;
+    KNOCK4              = 0x8D: I8,  RAW,           Standalone;
+    KNOCK5              = 0x8E: I8,  RAW,           Standalone;
+    KNOCK6              = 0x8F: I8,  RAW,           Standalone;
+    KNOCK7              = 0x90: I8,  RAW,           Standalone;
+    KNOCK8              = 0x91: I8,  RAW,           Standalone;
+
+    // Second throttle blade, and the duties the first two frames leave out.
+    TPS2                = 0x92: U16, PERCENT,       Standalone;
+    COIL_DUTY           = 0x93: U16, PERCENT,       Standalone;
+    INJ_DUTY2           = 0x94: U16, PERCENT,       Standalone;
+    // Rotary trailing ignition. Leading is CUR_SPARK_ADVANCE.
+    IGN_ANGLE_TRAIL     = 0x95: I16, DEGREES,       Standalone;
+
+    // The ECU's own board temperature, and whatever else the tuner wired to
+    // the spare temperature inputs.
+    ECU_TEMP            = 0x96: I16, CELSIUS,       Standalone;
+    AUX_TEMP1           = 0x97: I16, CELSIUS,       Standalone;
+    AUX_TEMP2           = 0x98: I16, CELSIUS,       Standalone;
+    DIFF_TEMP           = 0x99: I16, CELSIUS,       Standalone;
+
+    // Air in and fuel out, by mass. CYL_AIRMASS is what the model thinks one
+    // cylinder took; AIRFLOW is the whole engine.
+    CYL_AIRMASS         = 0x9A: U16, GRAMS,         Standalone;
+    AIRFLOW             = 0x9B: U16, KG_PER_H,      Standalone;
+    FUEL_USED           = 0x9C: I32, GRAMS,         Standalone;
+    FUEL_FLOW           = 0x9D: U16, KG_PER_H,      Standalone;
+    FUEL_RATE           = 0x9E: U16, L_PER_H,       Standalone;
+
+    // Closed-loop trim on the second bank; EGO_CORRECT is the first.
+    EGO_CORRECT2        = 0x9F: I16, PERCENT,       Standalone;
+    // Direct injection rail pressure. FUEL_PRES is the low-pressure side.
+    FUEL_PRES_HIGH      = 0xA0: U16, KPA,           Standalone;
+
+    // Exhaust cams. VVT_ANGLE and VVT_ANGLE2 are the intake pair.
+    VVT_EXH_ANGLE       = 0xA1: I16, DEGREES,       Standalone;
+    VVT_EXH_TARGET      = 0xA2: I16, DEGREES,       Standalone;
+    VVT_EXH_ANGLE2      = 0xA3: I16, DEGREES,       Standalone;
+    VVT_EXH_TARGET2     = 0xA4: I16, DEGREES,       Standalone;
+
+    // Wheel speeds as the ECU sees them. Driven against undriven is what
+    // traction control acts on, and VSS alone cannot show it.
+    WHEEL_SPEED_UNDRIVEN = 0xA5: U16, KMH,          Standalone;
+    WHEEL_SPEED_DRIVEN  = 0xA6: U16, KMH,           Standalone;
+    WHEEL_SLIP          = 0xA7: I16, PERCENT,       Standalone;
+    SLIP_TARGET         = 0xA8: I16, PERCENT,       Standalone;
+    TRACTION_LIMIT      = 0xA9: U16, PERCENT,       Standalone;
+
+    // What the ECU is taking away, and where the limiter sits.
+    IGN_CUT             = 0xAA: U16, PERCENT,       Standalone;
+    FUEL_CUT            = 0xAB: U16, PERCENT,       Standalone;
+    REV_LIMIT           = 0xAC: U16, RPM,           Standalone;
+    // Total ignition compensation the corrections have added up to.
+    IGN_COMP            = 0xAD: I16, DEGREES,       Standalone;
+
+    // Accelerometer, as a driver reads it: forward, right, up.
+    ACCEL_FWD           = 0xAE: I16, G_FORCE,       Standalone;
+    ACCEL_RIGHT         = 0xAF: I16, G_FORCE,       Standalone;
+    ACCEL_UP            = 0xB0: I16, G_FORCE,       Standalone;
+
+    // Trigger diagnostics. A dash that shows these turns "it stumbles
+    // sometimes" into a number that either climbs or does not.
+    LOST_SYNC           = 0xB1: U16, RAW,           Standalone;
+    MISS_COUNT          = 0xB2: U16, RAW,           Standalone;
+    TRIGGER_COUNT       = 0xB3: U16, RAW,           Standalone;
+    HOME_COUNT          = 0xB4: U16, RAW,           Standalone;
+    TRIG_SINCE_HOME     = 0xB5: U16, RAW,           Standalone;
+
+    // Distance this trip, which is not the odometer: it resets.
+    TRIP_DIST           = 0xB6: I32, KILOMETRES,    Standalone;
 }
