@@ -2,8 +2,8 @@
 //! CAN framing and spec-table consistency.
 
 use cogware_can::*;
-use embedded_hal_0_2::can::{Frame, Id, StandardId};
-use mcp2515::frame::CanFrame;
+use embedded_can::{Frame, Id, StandardId};
+use cogware_can::CanFrame;
 
 // Gauges are global statics; keep tests in this binary from interleaving.
 mod common;

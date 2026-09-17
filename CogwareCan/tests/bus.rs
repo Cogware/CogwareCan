@@ -5,7 +5,7 @@ use cogware_can::bus::*;
 use cogware_can::indicators::{self, Indicator};
 use cogware_can::protocol::{self, NODE_BROADCAST};
 use cogware_can::xfer;
-use embedded_hal_0_2::can::Frame;
+use embedded_can::Frame;
 
 mod common;
 use common::bus;
@@ -137,7 +137,7 @@ fn progress_only_moves_the_state_a_whole_percent_at_a_time() {
 fn a_sender_percentage_feeds_the_announced_progress() {
     let image = [0xAAu8; 60];
     let mut store = [0u8; 64];
-    let mut tx = xfer::Sender::new(1, &image, xfer::kind::SCENE, 64, 1);
+    let mut tx = xfer::Sender::new(1, &image[..], xfer::kind::SCENE, 64, 1);
     let mut rx = xfer::Receiver::new(1, xfer::BufferSink::new(&mut store));
     assert_eq!(tx.percent(), 0);
 
@@ -151,7 +151,7 @@ fn a_sender_percentage_feeds_the_announced_progress() {
                 tx.feed_reply(&reply);
             }
         }
-        bus.update_progress(tx.progress().0 as u32, tx.progress().1 as u32);
+        bus.update_progress(tx.progress().0, tx.progress().1);
         if tx.state() == xfer::TxState::Done {
             break;
         }
@@ -181,9 +181,18 @@ fn errors_and_offers_reach_the_master_intact() {
 
 #[test]
 fn a_state_frame_round_trips_and_junk_is_rejected() {
-    let state = BusState { mode: 3, flags: FLAG_UPDATE | FLAG_ECU_LINK, progress: 55, target: 2 };
+    let state = BusState {
+        mode: 3,
+        flags: FLAG_UPDATE | FLAG_ECU_LINK,
+        progress: 55,
+        target: 2,
+        radio: 0,
+        radio_fault: 0,
+    };
     let f = state.to_frame().unwrap();
-    assert_eq!(f.dlc(), STATE_LEN);
+    // What this build emits. `STATE_LEN` is the shortest a reader accepts,
+    // which is what lets the frame grow without stranding an older node.
+    assert_eq!(f.dlc(), STATE_LEN_FULL);
     assert_eq!(BusState::parse(&f), Some(state));
     assert!(state.update_in_progress() && state.ecu_link() && !state.mode_locked());
 
@@ -354,4 +363,265 @@ fn a_lamp_a_node_reports_reads_back_through_the_ordinary_gauge_path() {
     assert!(!indicators::get(Indicator::Fan), "cleared for the test");
     cogware_can::feed_frame(&broadcast).expect("an ordinary gauge frame");
     assert!(indicators::get(Indicator::Fan), "it did not come back");
+}
+
+// ===================== the server's radios =====================
+
+/// The server is the car's only aerial and the one board nobody can reach once
+/// the car is together, so every one of these is about a display asking for
+/// something the server alone can do.
+
+#[test]
+fn a_display_can_ask_the_server_to_turn_bluetooth_on() {
+    let view = BusView::new(0x02);
+    let frame = view.request_bluetooth(true).expect("a request must frame");
+    let msg = NodeMsg::parse(&frame).expect("and must parse back");
+    assert_eq!(msg.node, 0x02);
+    assert_eq!(msg.opcode, Opcode::RadioRequest);
+    assert_eq!(msg.radio(), Some((RADIO_BLUETOOTH, RADIO_ON)));
+}
+
+#[test]
+fn a_display_can_ask_the_server_to_accept_a_phone() {
+    let view = BusView::new(0x01);
+    let frame = view.request_pairing().expect("a request must frame");
+    let msg = NodeMsg::parse(&frame).expect("and must parse back");
+    assert_eq!(msg.radio(), Some((RADIO_BLUETOOTH, RADIO_PAIR)));
+}
+
+#[test]
+fn the_master_answers_a_radio_request_without_acting_on_it() {
+    let mut bus = Bus::new();
+    let _ = bus.announce();
+    let view = BusView::new(0x02);
+    let asked = view.request_bluetooth(true).expect("a request must frame");
+
+    let msg = bus.feed(&asked).expect("the master must see it");
+    assert_eq!(msg.opcode, Opcode::RadioRequest);
+    // Not applied: the aerial is hardware and the firmware owns it. Claiming
+    // it was on here would put that on every screen before it was true.
+    assert_eq!(bus.radio() & RADIO_BLUETOOTH, 0);
+    // But announced, so the node that asked is told what is actually so.
+    assert!(
+        bus.announce().is_some(),
+        "a request must be answered even when nothing comes of it"
+    );
+}
+
+#[test]
+fn the_state_follows_the_hardware_once_the_firmware_says_so() {
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    assert!(bus.state().bluetooth_on());
+    let frame = bus.state_frame().expect("a state must frame");
+    let seen = BusState::parse(&frame).expect("and must parse back");
+    assert!(seen.bluetooth_on());
+    assert!(!seen.wifi_on());
+    assert!(!seen.pairing());
+}
+
+#[test]
+fn a_radio_that_is_off_cannot_be_accepting_devices() {
+    let mut bus = Bus::new();
+    // Nothing is on, so there is nothing for a phone to arrive on.
+    assert!(!bus.set_pairing(true), "pairing on a dead radio must be refused");
+    assert!(!bus.state().pairing());
+
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    assert!(bus.set_pairing(true));
+    assert!(bus.state().pairing());
+
+    // And switching the radio off takes the pairing notice down with it,
+    // rather than leaving a bit set for something that cannot happen.
+    bus.set_radio(RADIO_BLUETOOTH, false);
+    assert!(!bus.state().pairing(), "pairing outlived the radio");
+}
+
+#[test]
+fn turning_one_radio_off_leaves_the_other_alone() {
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH | RADIO_WIFI, true);
+    bus.set_radio(RADIO_BLUETOOTH, false);
+    assert!(!bus.state().bluetooth_on());
+    assert!(bus.state().wifi_on(), "wifi was switched off with bluetooth");
+}
+
+#[test]
+fn every_node_learns_the_radio_state_from_the_broadcast() {
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    bus.set_pairing(true);
+    let frame = bus.state_frame().expect("a state must frame");
+
+    // The node that asked and the ones that did not both read the same thing,
+    // which is the point of putting it in the broadcast at all.
+    for node in [0x01, 0x02, 0x03] {
+        let mut view = BusView::new(node);
+        assert!(view.feed(&frame));
+        assert!(view.bluetooth_on());
+        assert!(view.pairing());
+    }
+}
+
+#[test]
+fn a_state_frame_from_a_master_that_predates_radios_reads_as_all_off() {
+    // Four bytes, which is what an older master sends. It must parse, and the
+    // radios must read as off rather than as whatever was next in the buffer.
+    let frame = protocol::frame(0x018, &[3, 0, 0, 0]).expect("a short state must frame");
+    let seen = BusState::parse(&frame).expect("a short state must still parse");
+    assert_eq!(seen.mode, 3, "the bytes it did send must survive");
+    assert!(!seen.bluetooth_on());
+    assert!(!seen.wifi_on());
+    assert!(!seen.pairing());
+}
+
+#[test]
+fn a_radio_request_too_short_to_read_is_refused_rather_than_guessed() {
+    // A node this build does not know could send one byte. Reading the missing
+    // action as zero would be reading it as "turn everything off".
+    let frame = message(0x02, Opcode::RadioRequest, &[RADIO_BLUETOOTH])
+        .expect("a one-byte request must frame");
+    let msg = NodeMsg::parse(&frame).expect("and must parse");
+    assert_eq!(msg.radio(), None);
+}
+
+// ===================== waiting on the server =====================
+
+/// A helper standing in for a display's clock.
+fn at(ms: u64) -> u64 {
+    ms
+}
+
+#[test]
+fn a_request_that_is_answered_settles_on_done() {
+    let mut view = BusView::new(0x02);
+    let mut ask = RadioAsk::pairing(at(0));
+    assert_eq!(ask.state(), RadioWait::Waiting);
+
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    bus.set_pairing(true);
+    view.feed(&bus.state_frame().expect("a state must frame"));
+
+    assert_eq!(ask.poll(&view, at(100)), RadioWait::Done);
+}
+
+#[test]
+fn a_radio_that_came_up_but_is_not_pairing_does_not_count_as_done() {
+    // Someone stood at the car with a phone would be told to hold it near a
+    // server that is refusing everything.
+    let mut view = BusView::new(0x02);
+    let mut ask = RadioAsk::pairing(at(0));
+
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    view.feed(&bus.state_frame().expect("a state must frame"));
+
+    assert_eq!(ask.poll(&view, at(100)), RadioWait::Waiting);
+}
+
+#[test]
+fn a_server_that_refuses_says_so_rather_than_going_quiet() {
+    let mut view = BusView::new(0x02);
+    let mut ask = RadioAsk::bluetooth(true, at(0));
+
+    let mut bus = Bus::new();
+    bus.radio_failed(RadioFault::Denied);
+    view.feed(&bus.state_frame().expect("a state must frame"));
+
+    assert_eq!(ask.poll(&view, at(100)), RadioWait::Failed(RadioFault::Denied));
+}
+
+#[test]
+fn a_radio_that_would_not_start_is_told_apart_from_a_refusal() {
+    // The whole reason the fault is on the wire: a node watching a bit stay
+    // clear cannot tell these apart, and they mean different things to do.
+    for fault in [
+        RadioFault::Denied,
+        RadioFault::NoRadio,
+        RadioFault::WouldNotStart,
+    ] {
+        let mut view = BusView::new(0x02);
+        let mut ask = RadioAsk::bluetooth(true, at(0));
+        let mut bus = Bus::new();
+        bus.radio_failed(fault);
+        view.feed(&bus.state_frame().expect("a state must frame"));
+        assert_eq!(ask.poll(&view, at(10)), RadioWait::Failed(fault));
+        assert!(!fault.describe().is_empty(), "every fault must have words");
+    }
+}
+
+#[test]
+fn a_server_that_never_answers_stops_the_throbber_rather_than_spinning_for_ever() {
+    let view = BusView::new(0x02);
+    let mut ask = RadioAsk::bluetooth(true, at(0));
+    assert_eq!(ask.poll(&view, at(RADIO_WAIT_MS - 1)), RadioWait::Waiting);
+    assert_eq!(
+        ask.poll(&view, at(RADIO_WAIT_MS)),
+        RadioWait::Failed(RadioFault::NoAnswer)
+    );
+}
+
+#[test]
+fn an_outcome_does_not_come_undone_on_a_later_broadcast() {
+    // A person has been told. The bus moving on afterwards -- somebody else
+    // switching the radio off, say -- must not rewrite what they were told.
+    let mut view = BusView::new(0x02);
+    let mut ask = RadioAsk::bluetooth(true, at(0));
+
+    let mut bus = Bus::new();
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    view.feed(&bus.state_frame().expect("a state must frame"));
+    assert_eq!(ask.poll(&view, at(10)), RadioWait::Done);
+
+    bus.set_radio(RADIO_BLUETOOTH, false);
+    view.feed(&bus.state_frame().expect("a state must frame"));
+    assert_eq!(ask.poll(&view, at(20)), RadioWait::Done, "the outcome moved");
+}
+
+#[test]
+fn a_new_request_clears_the_fault_the_last_one_left() {
+    let mut bus = Bus::new();
+    bus.radio_failed(RadioFault::WouldNotStart);
+    assert_eq!(bus.state().fault(), Some(RadioFault::WouldNotStart));
+
+    let view = BusView::new(0x02);
+    let asked = view.request_bluetooth(true).expect("a request must frame");
+    bus.feed(&asked);
+    assert_eq!(
+        bus.state().fault(),
+        None,
+        "a stale fault would fail the next request before it was tried"
+    );
+}
+
+#[test]
+fn a_radio_that_comes_up_clears_the_fault() {
+    let mut bus = Bus::new();
+    bus.radio_failed(RadioFault::WouldNotStart);
+    bus.set_radio(RADIO_BLUETOOTH, true);
+    assert_eq!(bus.state().fault(), None);
+    assert!(bus.state().bluetooth_on());
+}
+
+#[test]
+fn a_fault_from_a_newer_server_is_carried_rather_than_read_as_well() {
+    let mut view = BusView::new(0x02);
+    let mut ask = RadioAsk::bluetooth(true, at(0));
+    let mut bus = Bus::new();
+    bus.radio_failed(RadioFault::Unknown(200));
+    view.feed(&bus.state_frame().expect("a state must frame"));
+    assert_eq!(
+        ask.poll(&view, at(10)),
+        RadioWait::Failed(RadioFault::Unknown(200))
+    );
+}
+
+#[test]
+fn a_state_frame_from_a_master_that_predates_faults_reads_as_no_fault() {
+    let frame = protocol::frame(0x018, &[0, 0, 0, 0, RADIO_BLUETOOTH])
+        .expect("a five-byte state must frame");
+    let seen = BusState::parse(&frame).expect("and must parse");
+    assert!(seen.bluetooth_on());
+    assert_eq!(seen.fault(), None);
 }
