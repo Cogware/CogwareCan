@@ -78,6 +78,7 @@ mod gauge;
 pub mod haltech;
 pub mod blink;
 pub mod drive;
+pub mod trace;
 pub mod indicators;
 pub mod ingest;
 pub mod link;

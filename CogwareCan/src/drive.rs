@@ -23,11 +23,11 @@ use crate::gauge::{gauge_by_id, GaugeSpec};
 
 /// How long one lap takes, in seconds.
 ///
-/// A few minutes, because a car takes a few minutes to do this. The first
-/// version ran the whole thing in forty seconds and read as a needle being
-/// thrown about rather than a car being driven -- and the shut-throttle tail
-/// left everything standing still long enough to look frozen.
-pub const LAP_S: f32 = CYCLE_S;
+/// However long the trace it follows runs for. Ten minutes of real driving,
+/// which is what it takes to look like driving: the first two attempts at
+/// writing a cycle by hand were either thrown about or standing still, and
+/// neither read as a car.
+pub const LAP_S: f32 = crate::trace::SECONDS as f32;
 
 /// Redline, and where it changes up in normal driving.
 ///
@@ -43,44 +43,6 @@ const IDLE_RPM: f32 = 820.0;
 /// Five numbers rather than a gearbox: what matters on the glass is that road
 /// speed keeps climbing while the revs drop back on every change.
 const GEAR_TOP_KMH: [f32; 5] = [22.0, 40.0, 62.0, 92.0, 135.0];
-
-/// How hard it pulls and how hard it stops, in km/h per second.
-///
-/// About 2.6 m/s² and 3.3 m/s²: brisk without being a launch, and firm
-/// braking without being an emergency stop. This is the pair that decides
-/// whether the speedometer looks like a car or like a slider being dragged.
-const ACCEL_KMH_S: f32 = 9.5;
-const BRAKE_KMH_S: f32 = 12.0;
-
-/// The drive: how long to spend heading for each speed, in seconds and km/h.
-///
-/// A town run, a junction, a slip road, a stretch of dual carriageway, then
-/// back off and stop. Nothing here sits still for long -- a dash with every
-/// needle parked tells you nothing about whether it is still live.
-const LEGS: &[(f32, f32)] = &[
-    (10.0, 0.0),   // stood at idle, warming
-    (25.0, 48.0),  // away, up through the low gears
-    (30.0, 48.0),  // through the town
-    (12.0, 20.0),  // slowing for a junction
-    (10.0, 20.0),  // crawling round it
-    (30.0, 100.0), // onto the slip road and up to speed
-    (45.0, 105.0), // cruising
-    (18.0, 62.0),  // easing off
-    (25.0, 88.0),  // and back up to overtake
-    (20.0, 0.0),   // braking to a stop
-    (15.0, 0.0),   // stood again
-];
-
-/// The whole cycle, in seconds.
-const CYCLE_S: f32 = {
-    let mut total = 0.0;
-    let mut i = 0;
-    while i < LEGS.len() {
-        total += LEGS[i].0;
-        i += 1;
-    }
-    total
-};
 
 /// A whole dashboard's worth of readings, as physical quantities.
 ///
@@ -176,30 +138,51 @@ impl Car {
             .map(|(_, pick)| pick(self))
     }
 
-    /// The speed the drive is asking for at this point in the cycle.
-    fn target_kmh(&self) -> f32 {
-        let mut at = self.at_s;
-        for (secs, kmh) in LEGS {
-            if at < *secs {
-                return *kmh;
-            }
-            at -= secs;
-        }
-        // Past the end only by rounding; the last leg is a standstill anyway.
-        LEGS.last().map_or(0.0, |(_, kmh)| *kmh)
+    /// Road speed from the trace, interpolated between its one-second samples.
+    ///
+    /// Straight from the log rather than chased with an acceleration limit:
+    /// the accelerations in it are already a real car's, and smoothing them
+    /// towards a target is what made the hand-written cycles feel synthetic.
+    fn traced_kmh(&self) -> f32 {
+        let samples = crate::trace::SPEED_DKMH;
+        let at = self.at_s.max(0.0);
+        let i = at as usize;
+        let (a, b) = match (samples.get(i), samples.get(i + 1)) {
+            (Some(a), Some(b)) => (*a as f32, *b as f32),
+            (Some(a), None) => (*a as f32, *a as f32),
+            _ => return 0.0,
+        };
+        let frac = at - i as f32;
+        (a + (b - a) * frac) / 10.0
     }
 
-    /// The leg's target, with the wander any real right foot has in it.
+    /// Which gear to be in, holding the one already engaged until the speed
+    /// is properly past a change point.
     ///
-    /// Nobody holds a speed to the decimal. Without this the cruising legs sat
-    /// at exactly one number and every needle stopped dead, which reads as a
-    /// feed that has died rather than a car holding station.
-    fn wandering_target(&self) -> f32 {
-        let base = self.target_kmh();
-        if base > 5.0 {
-            base + sinf(self.at_s * 0.55) * 1.7 + sinf(self.at_s * 0.19) * 1.1
+    /// Without the margin it hunts: a trace sitting either side of a boundary
+    /// swaps gear every second and throws the tachometer between two very
+    /// different numbers, which no gearbox does and no dash should show.
+    fn choose_gear(&self) -> u8 {
+        const MARGIN_KMH: f32 = 4.0;
+        if self.kmh < 3.0 {
+            return 0;
+        }
+        let ideal = GEAR_TOP_KMH
+            .iter()
+            .position(|top| self.kmh <= *top)
+            .map_or(GEAR_TOP_KMH.len(), |i| i + 1) as u8;
+        let held = self.gear;
+        if held == 0 || held > GEAR_TOP_KMH.len() as u8 {
+            return ideal;
+        }
+        let top = GEAR_TOP_KMH[usize::from(held) - 1];
+        let bottom = if held > 1 { GEAR_TOP_KMH[usize::from(held) - 2] } else { 0.0 };
+        // Stay put while the speed is still within this gear's band, widened
+        // at both ends so crossing a boundary has to mean it.
+        if self.kmh <= top + MARGIN_KMH && self.kmh >= bottom - MARGIN_KMH {
+            held
         } else {
-            base
+            ideal
         }
     }
 
@@ -210,40 +193,26 @@ impl Car {
     /// which is what makes the numbers agree with each other rather than each
     /// sweeping on a clock of its own.
     fn drive(&mut self, dt: f32) {
-        let target = self.wandering_target();
-
-        // Chase it, but only as fast as a car can. The limit is the whole
-        // reason this reads as driving rather than as a value being set.
-        let gap = target - self.kmh;
-        let step = if gap > 0.0 {
-            (ACCEL_KMH_S * dt).min(gap)
-        } else {
-            -(BRAKE_KMH_S * dt).min(-gap)
-        };
-        self.kmh = (self.kmh + step).max(0.0);
+        let was = self.kmh;
+        self.kmh = self.traced_kmh();
+        // What the car is actually doing, in km/h per second. The trace's own
+        // derivative, so hard acceleration and lifting off are the real ones.
+        let accel = if dt > 0.0 { (self.kmh - was) / dt } else { 0.0 };
 
         // Throttle is what it takes: enough to hold this speed against drag,
-        // plus whatever is being asked for on top. Shut when slowing.
+        // plus whatever the acceleration is asking for on top, and shut when
+        // the trace is slowing.
         let holding = 6.0 + self.kmh * 0.26;
-        self.throttle = if gap > 0.5 {
-            (holding + 34.0).min(92.0)
-        } else if gap < -0.5 {
+        self.throttle = if accel < -0.4 {
             0.0
         } else {
-            holding
+            holding + accel * 7.0
         }
         .clamp(0.0, 100.0);
 
         // The gear is the lowest one that still reaches this speed by its
         // change-up point, so revs fall as each goes in and climb again after.
-        self.gear = if self.kmh < 3.0 {
-            0
-        } else {
-            GEAR_TOP_KMH
-                .iter()
-                .position(|top| self.kmh <= *top)
-                .map_or(GEAR_TOP_KMH.len(), |i| i + 1) as u8
-        };
+        self.gear = self.choose_gear();
         self.rpm = match self.gear {
             // Idle wanders a little, the way one does. A needle that is
             // perfectly still is one nothing is feeding.
@@ -415,6 +384,7 @@ mod tests {
         assert!(car.reading(0xFFFF).is_none(), "and an unknown id is none");
     }
 
+
     #[test]
     fn it_takes_a_car_s_worth_of_time_to_reach_a_speed() {
         // The first version did nought to a hundred and ninety in eighteen
@@ -457,6 +427,29 @@ mod tests {
             (1200.0..3200.0).contains(&mean),
             "mean of {mean:.0} rpm while moving"
         );
+    }
+
+    #[test]
+    fn the_gearbox_does_not_hunt_across_a_change_point() {
+        // A trace sitting either side of a boundary was swapping gear every
+        // second and throwing the tachometer between two very different
+        // numbers, which no gearbox does.
+        let seen = lap();
+        let changes = seen.windows(2).filter(|w| w[0].gear != w[1].gear).count();
+        // Ten minutes of hard driving is a few dozen changes, not hundreds.
+        assert!(changes < 120, "{changes} gear changes in one run");
+    }
+
+    #[test]
+    fn the_trace_is_the_one_that_was_published() {
+        // A table this long is generated, and a resampling mistake would be
+        // invisible on the glass. Its shape is worth pinning.
+        let trace = crate::trace::SPEED_DKMH;
+        assert_eq!(crate::trace::SECONDS, 600, "US06 runs ten minutes");
+        assert_eq!(trace[0], 0, "it starts at a standstill");
+        let peak = trace.iter().copied().max().expect("samples");
+        // Eighty miles an hour, in tenths of a km/h.
+        assert!((1280..1300).contains(&peak), "peak of {peak} is not the US06's");
     }
 
     #[test]
