@@ -6,7 +6,7 @@
 
 use cogware_can::subscribe::{Publisher, Subscription};
 use cogware_can::*;
-use mcp2515::frame::CanFrame;
+use cogware_can::CanFrame;
 
 /// What one display wants to show. Firmware hard-codes its own list.
 const WANTED: [u8; 6] = [

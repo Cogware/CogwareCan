@@ -6,13 +6,15 @@
 //!
 //!     cargo run --example custom_source
 
-use cogware_can::decode::{conv::*, CanFrameMap, CanSource, Field};
-use cogware_can::{field, *};
+use cogware_can::decode::{conv::*, CanFrameMap, CanSource, Field, Flag, LampFrame};
+use cogware_can::indicators::{self, Indicator};
+use cogware_can::{field, flag, *};
 
-// Suppose "Acme EFI" broadcasts two frames from a base ID of 0x640:
+// Suppose "Acme EFI" broadcasts three frames from a base ID of 0x640:
 //
 //   0x640: rpm u16 LE | MAP in kPa*4 u16 LE | coolant °C+50 u8 | TPS %*2 u8
 //   0x641: battery mV u16 LE | lambda*1000 u16 LE | oil pressure psi u8
+//   0x642: a byte of status bits
 
 /// kPa*4 into the tenths-of-a-kPa the MAP gauge stores.
 fn kpa_x4(v: i32) -> i32 {
@@ -40,6 +42,23 @@ static SENSORS: &[Field] = &[
     field!(4, U8, OIL_PRES, psi),
 ];
 
+// Status bits, and the lamps they were taken to mean. Write this out bit by
+// bit, the ones left dark included: mapping a protocol's flag to one of this
+// crate's lamps is a judgement, not a decode, and the next person to read it
+// should see the decision rather than have to infer it.
+//
+//   0x642 bit 0  rev limiter cutting   -> RevLimit
+//          bit 1  knock heard          -> Knock
+//          bit 2  fan relay            -> Fan
+//          bit 3  "service due" timer  -> --, a calendar, not a fault
+//          bit 4  main relay energised -> --, the ECU being powered is not
+//                                          news to a dash it is feeding
+static STATUS: &[Flag] = &[
+    flag!(0, 0, RevLimit),
+    flag!(0, 1, Knock),
+    flag!(0, 2, Fan),
+];
+
 static ACME: CanSource = CanSource {
     name: "Acme EFI",
     default_base: 0x640,
@@ -47,6 +66,7 @@ static ACME: CanSource = CanSource {
         CanFrameMap { id_offset: 0, fields: ENGINE },
         CanFrameMap { id_offset: 1, fields: SENSORS },
     ],
+    lamps: &[LampFrame { id_offset: 2, flags: STATUS }],
 };
 
 fn main() {
@@ -69,6 +89,16 @@ fn main() {
     println!("  battery   {:>7.2} V", BAT_VOL.as_f32().unwrap());
     println!("  AFR       {:>7.2}", AFR_PRI.as_f32().unwrap());
     println!("  oil press {:>7.1} kPa ({:.0} psi back)", OIL_PRES.as_f32().unwrap(), OIL_PRES.to(Unit::PSI).unwrap());
+
+    // Status bits land as lamps, which a display reads exactly as it reads
+    // one the server set: a lamp is a lamp whatever lit it.
+    ACME.feed_default(&protocol::frame(0x642, &[0b0000_0110]).unwrap());
+    println!("\n  lamps lit: {:?}", indicators::displayed().iter().map(|i| i.name()).collect::<Vec<_>>());
+    println!("  knocking:  {}", indicators::get(Indicator::Knock));
+    // And go out again when the bit does, because the ECU is the authority
+    // on its own state.
+    ACME.feed_default(&protocol::frame(0x642, &[0]).unwrap());
+    println!("  knocking:  {} (after the bit cleared)", indicators::get(Indicator::Knock));
 
     // The base ID is configurable on most ECUs; `feed` takes the one in use.
     clear_all();

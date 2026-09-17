@@ -3,14 +3,15 @@
 //!
 //!     cargo run --example ecu_can
 
+use cogware_can::CanFrame;
 use cogware_can::*;
 
-fn be(id: u16, words: &[i16]) -> mcp2515::frame::CanFrame {
+fn be(id: u16, words: &[i16]) -> CanFrame {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_be_bytes()).collect();
     protocol::frame(id, &bytes).unwrap()
 }
 
-fn le(id: u16, words: &[i16]) -> mcp2515::frame::CanFrame {
+fn le(id: u16, words: &[i16]) -> CanFrame {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     protocol::frame(id, &bytes).unwrap()
 }
@@ -76,6 +77,6 @@ fn main() {
     }
 }
 
-fn d_frame(id: u16, data: &[u8]) -> mcp2515::frame::CanFrame {
+fn d_frame(id: u16, data: &[u8]) -> CanFrame {
     protocol::frame(id, data).unwrap()
 }

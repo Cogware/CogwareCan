@@ -3,6 +3,7 @@
 //!
 //!     cargo run --example ota_update
 
+use cogware_can::CanFrame;
 use cogware_can::protocol::NODE_BROADCAST;
 use cogware_can::xfer::*;
 use cogware_can::{crc, protocol};
@@ -27,7 +28,7 @@ fn main() {
     ];
 
     // Broadcast to every node, checkpoint every 8 blocks, expect 2 replies.
-    let mut master = Sender::new(NODE_BROADCAST, &image, 1, 8, 2);
+    let mut master = Sender::new(NODE_BROADCAST, &image[..], 1, 8, 2);
 
     // Drop a few frames to show the recovery path. Block 3 and block 11 are
     // lost on the way out, as they would be on a noisy bus.
@@ -101,7 +102,7 @@ fn main() {
     let mut b7 = [0u8; 256];
     let mut b9 = [0u8; 256];
     let mut only = [Receiver::new(7, BufferSink::new(&mut b7)), Receiver::new(9, BufferSink::new(&mut b9))];
-    let mut m = Sender::new(7, &image, 1, 16, 1);
+    let mut m = Sender::new(7, &image[..], 1, 16, 1);
     while !matches!(m.state(), TxState::Done | TxState::Failed(_)) {
         if let Some(f) = m.next_frame() {
             for n in only.iter_mut() {
@@ -119,7 +120,7 @@ fn main() {
     println!("\ncorrupted image");
     let mut bad = [0u8; 256];
     let mut node = Receiver::new(7, BufferSink::new(&mut bad));
-    let mut m = Sender::new(7, &image, 1, 16, 1);
+    let mut m = Sender::new(7, &image[..], 1, 16, 1);
     while !matches!(m.state(), TxState::Done | TxState::Failed(_)) {
         if let Some(f) = m.next_frame() {
             let f = flip_a_bit(&f);
@@ -133,8 +134,8 @@ fn main() {
 }
 
 /// Corrupt one byte of the third data block, as line noise would.
-fn flip_a_bit(f: &mcp2515::frame::CanFrame) -> mcp2515::frame::CanFrame {
-    use embedded_hal_0_2::can::Frame;
+fn flip_a_bit(f: &CanFrame) -> CanFrame {
+    use embedded_can::Frame;
     if protocol::id_of(f) == Some(DATA_ID) && f.data()[0] == 3 {
         let mut d = f.data()[..f.dlc()].to_vec();
         d[2] ^= 0x20;

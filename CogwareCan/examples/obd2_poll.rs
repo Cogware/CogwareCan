@@ -5,11 +5,11 @@
 
 use cogware_can::obd2;
 use cogware_can::*;
-use mcp2515::frame::CanFrame;
+use cogware_can::CanFrame;
 
 /// Stand-in for a car's ECU answering a mode 01 request.
 fn car_answers(request: &CanFrame) -> Option<CanFrame> {
-    use embedded_hal_0_2::can::Frame;
+    use embedded_can::Frame;
     let pid = request.data()[2];
     let payload: &[u8] = match pid {
         0x0C => &[0x36, 0xB0], // (256*54 + 176)/4 = 3500 rpm
