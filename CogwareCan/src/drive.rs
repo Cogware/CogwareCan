@@ -75,6 +75,12 @@ pub struct Car {
     pub volts: f32,
     /// What is left in the tank, 0..=100.
     pub fuel: f32,
+    /// What the engine is actually running, as an air-fuel ratio.
+    pub afr: f32,
+    /// What the ECU is aiming for.
+    pub afr_target: f32,
+    /// Boost the ECU is asking for, kPa above nothing.
+    pub boost_target: f32,
 }
 
 impl Car {
@@ -87,6 +93,9 @@ impl Car {
             intake: AMBIENT_C,
             volts: 12.4,
             fuel: 78.0,
+            afr: STOICH,
+            afr_target: STOICH,
+            boost_target: 0.0,
             ..Self::default()
         }
     }
@@ -246,6 +255,27 @@ impl Car {
         // load keeps the voltmeter from looking painted on.
         self.volts = 13.9 + (self.rpm / REDLINE) * 0.5 - self.throttle * 0.004;
 
+        // What the ECU is asking for: stoichiometric while it is cruising and
+        // can run closed loop, richer as soon as it is being worked, because
+        // a hot engine at full throttle is cooled by fuel.
+        self.afr_target = if self.throttle > 65.0 {
+            11.9
+        } else if self.throttle > 35.0 {
+            13.2
+        } else {
+            STOICH
+        };
+        // What it is actually running chases that, and overshoots on a change
+        // of throttle the way a real mixture does before the loop catches up.
+        self.afr += (self.afr_target - self.afr) * dt * 4.0;
+        self.afr += sinf(self.at_s * 2.3) * 0.06;
+        self.afr = self.afr.clamp(10.5, 16.5);
+
+        // Boost is asked for in proportion to how hard it is being driven,
+        // and only once there are revs enough to make any.
+        let spool = ((self.rpm - 2200.0) / 2200.0).clamp(0.0, 1.0);
+        self.boost_target = spool * (self.throttle / 100.0) * 95.0;
+
         // A tank does not move much in a few minutes, so this is slow enough
         // to be honest and fast enough to prove the gauge is live.
         self.fuel = (self.fuel - dt * 0.012).max(4.0);
@@ -292,7 +322,14 @@ pub static DRIVEN: &[(u16, Pick)] = &[
     (0x5A, |c| c.oil_pres),
     (0x71, |c| c.oil_temp),
     (0x73, |c| c.fuel),
+    (0x29, |c| c.afr),
+    (0x31, |c| c.afr_target),
+    (0x38, |c| c.boost_target),
 ];
+
+/// A stoichiometric mixture for petrol, which is what a warm engine idles and
+/// cruises at whenever the ECU is allowed to run closed loop.
+const STOICH: f32 = 14.7;
 
 #[cfg(test)]
 mod tests {
@@ -450,6 +487,50 @@ mod tests {
         let peak = trace.iter().copied().max().expect("samples");
         // Eighty miles an hour, in tenths of a km/h.
         assert!((1280..1300).contains(&peak), "peak of {peak} is not the US06's");
+    }
+
+    #[test]
+    fn the_mixture_richens_when_it_is_worked() {
+        let seen = lap();
+        let hardest = seen
+            .iter()
+            .max_by(|a, b| a.throttle.total_cmp(&b.throttle))
+            .expect("samples");
+        assert!(
+            hardest.afr < 13.5,
+            "wide open it should be rich, saw {:.1}",
+            hardest.afr
+        );
+        let cruising = seen
+            .iter()
+            .filter(|c| c.throttle > 5.0 && c.throttle < 30.0 && c.kmh > 40.0)
+            .count();
+        assert!(cruising > 0, "there should be some cruising in a real trace");
+    }
+
+    #[test]
+    fn nothing_a_scene_binds_is_left_reading_zero() {
+        // The left gauge sat at AFR 0 because the model drove eleven channels
+        // and the scene bound a twelfth. A gauge nobody feeds is indis-
+        // tinguishable on the glass from one reading nought.
+        let mut car = Car::new();
+        for _ in 0..1200 {
+            car.advance(50_000);
+        }
+        for (id, _) in DRIVEN {
+            let name = gauge_by_id(*id).expect("in the table").name;
+            assert!(
+                car.reading(*id).is_some(),
+                "{name} is listed as driven but has no reading"
+            );
+        }
+        // The ones the cockpit's own scenes bind, by id, so adding a widget
+        // that reads something nothing produces fails here rather than on a
+        // dashboard.
+        for id in [0x24, 0x26, 0x2D, 0x57, 0x5A, 0x73, 0x28, 0x29, 0x31, 0x38] {
+            let name = gauge_by_id(id).expect("in the table").name;
+            assert!(car.reading(id).is_some(), "{name} is bound but not driven");
+        }
     }
 
     #[test]
