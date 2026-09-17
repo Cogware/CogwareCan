@@ -23,21 +23,64 @@ use crate::gauge::{gauge_by_id, GaugeSpec};
 
 /// How long one lap takes, in seconds.
 ///
-/// Long enough that a gear holds for a moment and somebody watching can see
-/// what is happening, short enough to sit through while adjusting a widget.
-pub const LAP_S: f32 = 40.0;
+/// A few minutes, because a car takes a few minutes to do this. The first
+/// version ran the whole thing in forty seconds and read as a needle being
+/// thrown about rather than a car being driven -- and the shut-throttle tail
+/// left everything standing still long enough to look frozen.
+pub const LAP_S: f32 = CYCLE_S;
 
-/// Redline, and the shift point just under it.
-const REDLINE: f32 = 7000.0;
-const SHIFT_AT: f32 = 6200.0;
-/// Where the engine settles with no throttle.
-const IDLE_RPM: f32 = 850.0;
-
-/// Road speed in each gear at [`SHIFT_AT`], which is what sets the ratios.
+/// Redline, and where it changes up in normal driving.
 ///
-/// Five numbers rather than a gearbox: what matters on the glass is that
-/// speed keeps climbing while revs drop back on every shift.
-const GEAR_TOP_KMH: [f32; 5] = [40.0, 70.0, 105.0, 145.0, 190.0];
+/// A road car shifts a long way short of the limiter unless it is being
+/// pressed, so the needle lives in the middle of the dial rather than the top.
+const REDLINE: f32 = 7000.0;
+const SHIFT_AT: f32 = 3200.0;
+/// Where the engine settles with no throttle.
+const IDLE_RPM: f32 = 820.0;
+
+/// Road speed at which each gear reaches [`SHIFT_AT`].
+///
+/// Five numbers rather than a gearbox: what matters on the glass is that road
+/// speed keeps climbing while the revs drop back on every change.
+const GEAR_TOP_KMH: [f32; 5] = [22.0, 40.0, 62.0, 92.0, 135.0];
+
+/// How hard it pulls and how hard it stops, in km/h per second.
+///
+/// About 2.6 m/s² and 3.3 m/s²: brisk without being a launch, and firm
+/// braking without being an emergency stop. This is the pair that decides
+/// whether the speedometer looks like a car or like a slider being dragged.
+const ACCEL_KMH_S: f32 = 9.5;
+const BRAKE_KMH_S: f32 = 12.0;
+
+/// The drive: how long to spend heading for each speed, in seconds and km/h.
+///
+/// A town run, a junction, a slip road, a stretch of dual carriageway, then
+/// back off and stop. Nothing here sits still for long -- a dash with every
+/// needle parked tells you nothing about whether it is still live.
+const LEGS: &[(f32, f32)] = &[
+    (10.0, 0.0),   // stood at idle, warming
+    (25.0, 48.0),  // away, up through the low gears
+    (30.0, 48.0),  // through the town
+    (12.0, 20.0),  // slowing for a junction
+    (10.0, 20.0),  // crawling round it
+    (30.0, 100.0), // onto the slip road and up to speed
+    (45.0, 105.0), // cruising
+    (18.0, 62.0),  // easing off
+    (25.0, 88.0),  // and back up to overtake
+    (20.0, 0.0),   // braking to a stop
+    (15.0, 0.0),   // stood again
+];
+
+/// The whole cycle, in seconds.
+const CYCLE_S: f32 = {
+    let mut total = 0.0;
+    let mut i = 0;
+    while i < LEGS.len() {
+        total += LEGS[i].0;
+        i += 1;
+    }
+    total
+};
 
 /// A whole dashboard's worth of readings, as physical quantities.
 ///
@@ -133,31 +176,67 @@ impl Car {
             .map(|(_, pick)| pick(self))
     }
 
-    /// One step of the lap.
+    /// The speed the drive is asking for at this point in the cycle.
+    fn target_kmh(&self) -> f32 {
+        let mut at = self.at_s;
+        for (secs, kmh) in LEGS {
+            if at < *secs {
+                return *kmh;
+            }
+            at -= secs;
+        }
+        // Past the end only by rounding; the last leg is a standstill anyway.
+        LEGS.last().map_or(0.0, |(_, kmh)| *kmh)
+    }
+
+    /// The leg's target, with the wander any real right foot has in it.
     ///
-    /// Throttle comes from where the lap is; everything else follows from
-    /// throttle and speed, which is what makes the numbers agree with each
-    /// other rather than each sweeping on its own clock.
+    /// Nobody holds a speed to the decimal. Without this the cruising legs sat
+    /// at exactly one number and every needle stopped dead, which reads as a
+    /// feed that has died rather than a car holding station.
+    fn wandering_target(&self) -> f32 {
+        let base = self.target_kmh();
+        if base > 5.0 {
+            base + sinf(self.at_s * 0.55) * 1.7 + sinf(self.at_s * 0.19) * 1.1
+        } else {
+            base
+        }
+    }
+
+    /// One step of the drive.
+    ///
+    /// Speed chases the leg's target under real acceleration limits, and
+    /// everything else follows from speed and from how hard it is working --
+    /// which is what makes the numbers agree with each other rather than each
+    /// sweeping on a clock of its own.
     fn drive(&mut self, dt: f32) {
-        let phase = self.at_s / LAP_S;
-        // Pull away, hold it open through the gears, lift for the cruise,
-        // then shut and brake back to a standstill.
-        self.throttle = match phase {
-            p if p < 0.06 => 0.0,           // sat at idle
-            p if p < 0.45 => 85.0,          // away and up through the gears
-            p if p < 0.70 => 22.0,          // cruising
-            p if p < 0.90 => 0.0,           // shut off, slowing
-            _ => 0.0,                       // stopped again
+        let target = self.wandering_target();
+
+        // Chase it, but only as fast as a car can. The limit is the whole
+        // reason this reads as driving rather than as a value being set.
+        let gap = target - self.kmh;
+        let step = if gap > 0.0 {
+            (ACCEL_KMH_S * dt).min(gap)
+        } else {
+            -(BRAKE_KMH_S * dt).min(-gap)
         };
+        self.kmh = (self.kmh + step).max(0.0);
 
-        // Speed follows throttle, with drag and braking taking it back.
-        let pull = self.throttle * 0.11;
-        let drag = self.kmh * 0.012 + if self.throttle == 0.0 { 6.0 } else { 0.0 };
-        self.kmh = (self.kmh + (pull - drag) * dt * 6.0).clamp(0.0, GEAR_TOP_KMH[4]);
+        // Throttle is what it takes: enough to hold this speed against drag,
+        // plus whatever is being asked for on top. Shut when slowing.
+        let holding = 6.0 + self.kmh * 0.26;
+        self.throttle = if gap > 0.5 {
+            (holding + 34.0).min(92.0)
+        } else if gap < -0.5 {
+            0.0
+        } else {
+            holding
+        }
+        .clamp(0.0, 100.0);
 
-        // The gear is whichever one holds this speed under the shift point,
-        // so revs fall as each goes in and climb again after.
-        self.gear = if self.kmh < 2.0 {
+        // The gear is the lowest one that still reaches this speed by its
+        // change-up point, so revs fall as each goes in and climb again after.
+        self.gear = if self.kmh < 3.0 {
             0
         } else {
             GEAR_TOP_KMH
@@ -166,12 +245,16 @@ impl Car {
                 .map_or(GEAR_TOP_KMH.len(), |i| i + 1) as u8
         };
         self.rpm = match self.gear {
-            0 => IDLE_RPM + self.throttle * 12.0,
+            // Idle wanders a little, the way one does. A needle that is
+            // perfectly still is one nothing is feeding.
+            0 => IDLE_RPM + sinf(self.at_s * 1.7) * 25.0 + self.throttle * 8.0,
             g => {
                 let top = GEAR_TOP_KMH[usize::from(g) - 1];
                 let bottom = if g > 1 { GEAR_TOP_KMH[usize::from(g) - 2] } else { 0.0 };
                 let through = ((self.kmh - bottom) / (top - bottom)).clamp(0.0, 1.0);
-                (IDLE_RPM + through * (SHIFT_AT - IDLE_RPM)).min(REDLINE)
+                let revs = IDLE_RPM + 350.0 + through * (SHIFT_AT - IDLE_RPM - 350.0);
+                // Working harder holds a gear longer, so it sits higher.
+                (revs + self.throttle * 4.5).min(REDLINE)
             }
         };
 
@@ -181,10 +264,11 @@ impl Car {
 
         // Coolant warms to its thermostat and stays; oil follows it a little
         // behind, which is the pair somebody watches on a cold start.
-        self.coolant += (THERMOSTAT_C - self.coolant) * dt * 0.05;
-        self.oil_temp += (self.coolant - 6.0 - self.oil_temp) * dt * 0.03;
-        // Intake sits above ambient by however much the engine is heating it.
-        self.intake = AMBIENT_C + 14.0 - (self.kmh * 0.06).min(11.0);
+        self.coolant += (THERMOSTAT_C - self.coolant) * dt * 0.02;
+        self.oil_temp += (self.coolant - 6.0 - self.oil_temp) * dt * 0.012;
+        // Intake sits above ambient by however much the engine is heating it,
+        // less whatever the road speed is carrying away.
+        self.intake = AMBIENT_C + 14.0 - (self.kmh * 0.08).min(11.0);
 
         // Oil pressure is mostly a function of revs, with a floor at idle.
         self.oil_pres = 110.0 + (self.rpm / REDLINE) * 310.0;
@@ -193,10 +277,28 @@ impl Car {
         // load keeps the voltmeter from looking painted on.
         self.volts = 13.9 + (self.rpm / REDLINE) * 0.5 - self.throttle * 0.004;
 
-        // A tank does not move much in forty seconds, so this is slow enough
+        // A tank does not move much in a few minutes, so this is slow enough
         // to be honest and fast enough to prove the gauge is live.
-        self.fuel = (self.fuel - dt * 0.05).max(4.0);
+        self.fuel = (self.fuel - dt * 0.012).max(4.0);
     }
+}
+
+/// Sine, without `std`.
+///
+/// Only used to make idle wander, so a short Taylor series folded into one
+/// quadrant is more than close enough and saves a dependency.
+fn sinf(x: f32) -> f32 {
+    const TAU: f32 = core::f32::consts::TAU;
+    let mut x = x % TAU;
+    if x < 0.0 {
+        x += TAU;
+    }
+    // Fold to -pi..pi, where the series is accurate.
+    if x > core::f32::consts::PI {
+        x -= TAU;
+    }
+    let x2 = x * x;
+    x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0)))
 }
 
 /// Ambient, for the temperatures that start there.
@@ -311,6 +413,50 @@ mod tests {
             "coolant reads {coolant} in tenths"
         );
         assert!(car.reading(0xFFFF).is_none(), "and an unknown id is none");
+    }
+
+    #[test]
+    fn it_takes_a_car_s_worth_of_time_to_reach_a_speed() {
+        // The first version did nought to a hundred and ninety in eighteen
+        // seconds, which read as a needle being thrown rather than a car.
+        let seen = lap();
+        let step = LAP_S / seen.len() as f32;
+        let from = seen.iter().position(|c| c.kmh >= 5.0).expect("pulls away");
+        let to = seen.iter().position(|c| c.kmh >= 95.0).expect("reaches speed");
+        let took = (to - from) as f32 * step;
+        assert!(took > 8.0, "nought to ninety-five took {took:.1}s, too quick");
+    }
+
+    #[test]
+    fn nothing_stands_still_for_long() {
+        // A dash where every needle is parked tells you nothing about whether
+        // it is still being fed, which is what made the old cycle look frozen.
+        let seen = lap();
+        let step = LAP_S / seen.len() as f32;
+        let mut still = 0.0;
+        let mut longest: f32 = 0.0;
+        for w in seen.windows(2) {
+            if (w[1].rpm - w[0].rpm).abs() < 1.0 && (w[1].kmh - w[0].kmh).abs() < 0.05 {
+                still += step;
+                longest = longest.max(still);
+            } else {
+                still = 0.0;
+            }
+        }
+        assert!(longest < 4.0, "everything sat still for {longest:.1}s");
+    }
+
+    #[test]
+    fn the_revs_sit_where_a_road_car_s_do() {
+        // Not pinned to the limiter: a cycle that spends its life near the
+        // redline is not what a dash looks like on the way to the shops.
+        let seen = lap();
+        let moving: Vec<_> = seen.iter().filter(|c| c.gear > 0).collect();
+        let mean = moving.iter().map(|c| c.rpm).sum::<f32>() / moving.len() as f32;
+        assert!(
+            (1200.0..3200.0).contains(&mean),
+            "mean of {mean:.0} rpm while moving"
+        );
     }
 
     #[test]
