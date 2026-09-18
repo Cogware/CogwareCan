@@ -303,6 +303,17 @@ impl<'a> Subscription<'a> {
         self.wanted.contains(&id) && self.acked.insert(id)
     }
 
+    /// Forget that the master acknowledged anything, so the node asks again.
+    ///
+    /// A subscription lives in the master's memory and nowhere else. If that
+    /// board restarts, every node still believes it is subscribed and has
+    /// nothing left to say, while the master no longer knows anyone wants
+    /// anything -- and the bus goes quiet with both ends waiting for the
+    /// other. A node that stops hearing its gauges calls this and asks again.
+    pub fn forget(&mut self) {
+        self.acked.clear();
+    }
+
     pub fn is_complete(&self) -> bool {
         self.wanted.iter().all(|id| self.acked.contains(*id))
     }
@@ -431,5 +442,31 @@ mod fresh_tests {
         assert!(fresh.worth_sending(0x26, 890, 20));
         assert!(fresh.worth_sending(0x2D, 3200, 20), "revs moved");
         assert!(!fresh.worth_sending(0x26, 890, 20), "coolant did not");
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    #[test]
+    fn a_node_can_ask_again_after_the_master_forgets_it() {
+        // The master keeps subscriptions in memory. When it restarts it knows
+        // nothing, and a node that thinks it is still subscribed never speaks
+        // again -- so both ends wait for the other and the bus stays quiet.
+        let wanted = [0x2Du8, 0x26];
+        let mut sub = Subscription::new(&wanted);
+        let mut master = Publisher::new();
+        for request in sub.request() {
+            for ack in master.feed(&request) {
+                sub.feed(&ack);
+            }
+        }
+        assert!(sub.is_complete(), "subscribed to begin with");
+        assert_eq!(sub.request().count(), 0, "and has nothing to ask for");
+
+        sub.forget();
+        assert!(!sub.is_complete(), "and asks again once it has forgotten");
+        assert!(sub.request().count() > 0);
     }
 }
