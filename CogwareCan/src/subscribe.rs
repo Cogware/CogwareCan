@@ -182,7 +182,7 @@ impl Publisher {
 
     /// One round, carrying only what has moved or is due to be repeated.
     pub fn broadcast_fresh<'a>(&self, fresh: &'a mut Fresh, since_ms: u16) -> BroadcastFresh<'a> {
-        BroadcastFresh { ids: self.wanted.into_iter(), fresh, since_ms }
+        BroadcastFresh { ids: self.wanted.into_iter(), fresh, since_ms, offered: None }
     }
 }
 
@@ -242,10 +242,32 @@ impl Iterator for Broadcast {
 ///
 /// Holds the record by mutable borrow, so the values it compares against are
 /// the ones it is about to send and cannot drift from them.
+///
+/// Nothing is recorded as told until the caller says it went out. A frame the
+/// controller refuses is offered again on the next round, rather than being
+/// written off and waited out: the transmit buffer is busy for a hundred
+/// microseconds and the keepalive is five hundred milliseconds, so charging a
+/// refusal to the keepalive froze a gauge for five thousand times as long as
+/// the thing that went wrong.
 pub struct BroadcastFresh<'a> {
     ids: IdIter,
     fresh: &'a mut Fresh,
     since_ms: u16,
+    /// The id and value of the frame last handed out, until it is kept.
+    offered: Option<(u8, i32)>,
+}
+
+impl BroadcastFresh<'_> {
+    /// Record the frame just taken as sent, so it is not offered again until
+    /// it moves or falls due.
+    ///
+    /// Call it once a send has actually succeeded. A round dropped without
+    /// calling it leaves the channel exactly as it was.
+    pub fn keep(&mut self) {
+        if let Some((id, value)) = self.offered.take() {
+            self.fresh.record(id, value);
+        }
+    }
 }
 
 impl Iterator for BroadcastFresh<'_> {
@@ -257,12 +279,15 @@ impl Iterator for BroadcastFresh<'_> {
             let Some(gauge) = gauge_by_id(id as u16) else {
                 continue;
             };
-            // Charged once per id per round whether or not it is sent, so the
-            // keepalive counts rounds gone by rather than frames sent.
-            if !self.fresh.worth_sending(id, gauge.raw(), self.since_ms) {
+            let value = gauge.raw();
+            // The clock is charged once per id per round whether or not the
+            // frame is sent, so the keepalive counts rounds gone by; what is
+            // held back is only the record of having told the bus.
+            if !self.fresh.is_due(id, value, self.since_ms) {
                 continue;
             }
             if let Some(f) = frame_for(id as u16) {
+                self.offered = Some((id, value));
                 return Some(f);
             }
         }
@@ -395,18 +420,33 @@ impl Fresh {
         Self { last: [0; 256], due: [0; 256] }
     }
 
-    /// Whether `id` is worth sending, given what it reads now.
+    /// Whether `id` wants sending, given what it reads now.
     ///
     /// `elapsed_ms` is the time since the last call, so the caller's own loop
-    /// period is the clock and this needs no timer of its own.
-    pub fn worth_sending(&mut self, id: u8, value: i32, elapsed_ms: u16) -> bool {
+    /// period is the clock and this needs no timer of its own. Asking does not
+    /// record anything: a caller that asks and then fails to send must be able
+    /// to ask again, so [`record`] is separate and follows a send that worked.
+    ///
+    /// [`record`]: Self::record
+    pub fn is_due(&mut self, id: u8, value: i32, elapsed_ms: u16) -> bool {
         let slot = usize::from(id);
         self.due[slot] = self.due[slot].saturating_sub(elapsed_ms);
-        if self.last[slot] == value && self.due[slot] > 0 {
-            return false;
-        }
+        self.last[slot] != value || self.due[slot] == 0
+    }
+
+    /// Note that the bus has been told `value` for `id`.
+    pub fn record(&mut self, id: u8, value: i32) {
+        let slot = usize::from(id);
         self.last[slot] = value;
         self.due[slot] = KEEPALIVE_MS;
+    }
+
+    /// Ask and record in one go, for a caller with nothing that can refuse.
+    pub fn worth_sending(&mut self, id: u8, value: i32, elapsed_ms: u16) -> bool {
+        if !self.is_due(id, value, elapsed_ms) {
+            return false;
+        }
+        self.record(id, value);
         true
     }
 }
@@ -421,6 +461,22 @@ mod fresh_tests {
         assert!(fresh.worth_sending(0x2D, 3000, 20), "the first one always goes");
         assert!(!fresh.worth_sending(0x2D, 3000, 20), "and the same one does not");
         assert!(fresh.worth_sending(0x2D, 3100, 20), "a change does");
+    }
+
+    #[test]
+    fn a_frame_that_never_went_out_is_offered_again() {
+        // The bug this guards: asking used to record, so a frame the CAN
+        // controller refused was written off as told and the channel then sat
+        // silent for a whole keepalive -- half a second of a frozen needle
+        // bought by a transmit buffer that was busy for a hundred microseconds.
+        let mut fresh = Fresh::new();
+        assert!(fresh.is_due(0x2D, 3000, 20), "a value never sent is due");
+        assert!(
+            fresh.is_due(0x2D, 3000, 20),
+            "and stays due while nothing has confirmed it went out"
+        );
+        fresh.record(0x2D, 3000);
+        assert!(!fresh.is_due(0x2D, 3000, 20), "only a send settles it");
     }
 
     #[test]
