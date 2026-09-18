@@ -8,6 +8,7 @@ use super::{
     RADIO_BLUETOOTH, RADIO_OFF, RADIO_ON, RADIO_PAIR,
 };
 use super::pack_lamp;
+use super::Health;
 
 /// A node's view of the bus: the last state the master announced, and the
 /// frames this node sends back.
@@ -171,6 +172,17 @@ impl BusView {
             args[i] = pack_lamp(*ind, *on);
         }
         message(self.node, Opcode::Input, &args[..lamps.len()])
+    }
+
+    /// Tell the master how fast this node is drawing.
+    ///
+    /// The master is the only node every display and every host already
+    /// talks to, so it is where a report about this node's own panel goes:
+    /// relayed out to whichever host is listening, rather than drawn on the
+    /// glass it is describing.
+    pub fn report_health(&self, health: &Health) -> Option<CanFrame> {
+        let args = health.encode();
+        message(self.node, Opcode::Health, &args)
     }
 
     /// Forget the announced state, so `is_synced` reports false again.

@@ -625,3 +625,30 @@ fn a_state_frame_from_a_master_that_predates_faults_reads_as_no_fault() {
     assert!(seen.bluetooth_on());
     assert_eq!(seen.fault(), None);
 }
+
+#[test]
+fn a_health_report_survives_the_bus_unchanged() {
+    // The whole point of the message is that what a node measures is what a
+    // host reads, with the master in between as a post office. A field lost
+    // or shifted on the way would read as a plausible wrong number, which is
+    // worse than no number.
+    use cogware_can::bus::{BusView, Health, NodeMsg};
+
+    let display = BusView::new(2);
+    let said = Health { fps: 23, compose_us: 4100, painted: 19_358, rects: 2 };
+    let frame = display.report_health(&said).expect("fits a frame");
+
+    let heard = NodeMsg::parse(&frame).expect("is a node message");
+    assert_eq!(heard.node, 2, "the sender's own id rides in the CAN id");
+    assert_eq!(heard.health(), Some(said));
+}
+
+#[test]
+fn a_short_health_report_is_refused_rather_than_guessed() {
+    use cogware_can::bus::Health;
+    assert_eq!(Health::decode(&[23, 0x04, 0x10, 0xbe]), None);
+    assert_eq!(
+        Health::decode(&[23, 0x04, 0x10, 0xbe, 0x00, 0x02]),
+        Some(Health { fps: 23, compose_us: 0x1004, painted: 190, rects: 2 })
+    );
+}

@@ -469,6 +469,13 @@ impl Status {
 /// car had enough to say, which is precisely backwards.
 pub const KIND_READINGS: u8 = 0x81;
 
+/// A node's own drawing report, relayed by the server: `[node, fps, compose
+/// us lo, compose us hi, px lo, px hi, rects]`. The bytes after the node are
+/// exactly the [`crate::bus::Health`] argument bytes the node put on the CAN
+/// bus, passed through rather than re-encoded: the server is a post office
+/// here, not a translator.
+pub const KIND_HEALTH: u8 = 0x83;
+
 /// The header byte at the front of a [`KIND_READINGS`] payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Readings {

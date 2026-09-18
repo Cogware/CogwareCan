@@ -211,6 +211,19 @@ pub enum Opcode {
     /// buttons and no easy way in once the car is together -- so the way it
     /// gets switched on is a display asking it to.
     RadioRequest = 6,
+    /// `[7, fps, compose us lo, compose us hi, px lo, px hi, rects]` — how
+    /// fast this node is drawing, and what a frame of it costs.
+    ///
+    /// Diagnostics, on the bus rather than on a wire nobody is reading: a
+    /// display's own console is not reachable once the car is together, and
+    /// a rate drawn on the glass costs a repaint of its own every window to
+    /// report itself. The master relays these to whichever host is listening,
+    /// so the numbers land in the editor instead of on the screen.
+    ///
+    /// Nothing here is control traffic: a master that never sees one loses
+    /// nothing but the readout, and a node sends it about once a second,
+    /// which is one frame in the hundreds a busy bus already carries.
+    Health = 7,
 }
 
 impl Opcode {
@@ -223,6 +236,7 @@ impl Opcode {
             4 => Opcode::Hello,
             5 => Opcode::Input,
             6 => Opcode::RadioRequest,
+            7 => Opcode::Health,
             _ => return None,
         })
     }
@@ -290,6 +304,45 @@ pub struct NodeMsg {
     len: u8,
 }
 
+/// What a node's [`Opcode::Health`] message says about its own drawing.
+///
+/// Averages over whatever window the node chose, which is its business: the
+/// reader wants the shape of the number, not its bookkeeping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Health {
+    /// Frames the node put on its panel per second.
+    pub fps: u8,
+    /// What composing one frame cost, in microseconds.
+    pub compose_us: u16,
+    /// Pixels one frame repainted.
+    pub painted: u16,
+    /// Damage rectangles one frame repainted.
+    pub rects: u8,
+}
+
+impl Health {
+    /// The seven argument bytes this report travels as.
+    #[must_use]
+    pub fn encode(&self) -> [u8; 7] {
+        let (cu, px) = (self.compose_us.to_le_bytes(), self.painted.to_le_bytes());
+        [self.fps, cu[0], cu[1], px[0], px[1], self.rects, 0]
+    }
+
+    /// The report those argument bytes carry, or `None` if they are short.
+    #[must_use]
+    pub fn decode(args: &[u8]) -> Option<Health> {
+        if args.len() < 6 {
+            return None;
+        }
+        Some(Health {
+            fps: args[0],
+            compose_us: u16::from_le_bytes([args[1], args[2]]),
+            painted: u16::from_le_bytes([args[3], args[4]]),
+            rects: args[5],
+        })
+    }
+}
+
 impl NodeMsg {
     /// Parse a node message, or `None` if this frame is not one.
     pub fn parse(f: &CanFrame) -> Option<NodeMsg> {
@@ -305,6 +358,15 @@ impl NodeMsg {
     /// Everything after the opcode byte.
     pub fn args(&self) -> &[u8] {
         &self.args[..self.len as usize]
+    }
+
+    /// The drawing report this message carries, if it is a [`Opcode::Health`].
+    #[must_use]
+    pub fn health(&self) -> Option<Health> {
+        match self.opcode {
+            Opcode::Health => Health::decode(self.args()),
+            _ => None,
+        }
     }
 
     /// The mode asked for, if this is a `ModeRequest`.
