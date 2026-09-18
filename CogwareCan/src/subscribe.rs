@@ -179,6 +179,11 @@ impl Publisher {
     pub fn broadcast(&self) -> Broadcast {
         Broadcast { ids: self.wanted.into_iter() }
     }
+
+    /// One round, carrying only what has moved or is due to be repeated.
+    pub fn broadcast_fresh<'a>(&self, fresh: &'a mut Fresh, since_ms: u16) -> BroadcastFresh<'a> {
+        BroadcastFresh { ids: self.wanted.into_iter(), fresh, since_ms }
+    }
 }
 
 /// Acknowledgements to transmit, at most one frame's worth.
@@ -226,6 +231,37 @@ impl Iterator for Broadcast {
     fn next(&mut self) -> Option<CanFrame> {
         loop {
             let id = self.ids.next()?;
+            if let Some(f) = frame_for(id as u16) {
+                return Some(f);
+            }
+        }
+    }
+}
+
+/// The same round, skipping whatever the bus has already been told.
+///
+/// Holds the record by mutable borrow, so the values it compares against are
+/// the ones it is about to send and cannot drift from them.
+pub struct BroadcastFresh<'a> {
+    ids: IdIter,
+    fresh: &'a mut Fresh,
+    since_ms: u16,
+}
+
+impl Iterator for BroadcastFresh<'_> {
+    type Item = CanFrame;
+
+    fn next(&mut self) -> Option<CanFrame> {
+        loop {
+            let id = self.ids.next()?;
+            let Some(gauge) = gauge_by_id(id as u16) else {
+                continue;
+            };
+            // Charged once per id per round whether or not it is sent, so the
+            // keepalive counts rounds gone by rather than frames sent.
+            if !self.fresh.worth_sending(id, gauge.raw(), self.since_ms) {
+                continue;
+            }
             if let Some(f) = frame_for(id as u16) {
                 return Some(f);
             }
@@ -310,5 +346,90 @@ impl Iterator for Requests<'_> {
             return None;
         }
         request_frame(&buf[..n])
+    }
+}
+
+/// What was last put on the bus, so a channel that has not moved is not sent
+/// again.
+///
+/// A dash broadcasting every subscribed gauge every round sends the same
+/// number over and over: measured on this bus, twelve gauges at fifty rounds a
+/// second came to five hundred and thirty frames a second, of which almost all
+/// carried a value the displays already had. It also makes a readout flicker
+/// through values faster than anybody can read one.
+///
+/// Slow channels then go quiet, so each is still repeated on a timer: a node
+/// that joins late, or that missed one, must not wait for a coolant gauge to
+/// move before it learns the temperature.
+pub struct Fresh {
+    /// The last value sent for each gauge id.
+    last: [i32; 256],
+    /// Milliseconds left before this id is due again whatever it reads.
+    due: [u16; 256],
+}
+
+/// How long a channel may stay quiet before it is repeated anyway.
+pub const KEEPALIVE_MS: u16 = 500;
+
+impl Default for Fresh {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Fresh {
+    /// Nothing sent yet, so the first round sends everything.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { last: [0; 256], due: [0; 256] }
+    }
+
+    /// Whether `id` is worth sending, given what it reads now.
+    ///
+    /// `elapsed_ms` is the time since the last call, so the caller's own loop
+    /// period is the clock and this needs no timer of its own.
+    pub fn worth_sending(&mut self, id: u8, value: i32, elapsed_ms: u16) -> bool {
+        let slot = usize::from(id);
+        self.due[slot] = self.due[slot].saturating_sub(elapsed_ms);
+        if self.last[slot] == value && self.due[slot] > 0 {
+            return false;
+        }
+        self.last[slot] = value;
+        self.due[slot] = KEEPALIVE_MS;
+        true
+    }
+}
+
+#[cfg(test)]
+mod fresh_tests {
+    use super::*;
+
+    #[test]
+    fn a_value_that_has_not_moved_is_not_sent_again() {
+        let mut fresh = Fresh::new();
+        assert!(fresh.worth_sending(0x2D, 3000, 20), "the first one always goes");
+        assert!(!fresh.worth_sending(0x2D, 3000, 20), "and the same one does not");
+        assert!(fresh.worth_sending(0x2D, 3100, 20), "a change does");
+    }
+
+    #[test]
+    fn a_quiet_channel_is_repeated_on_a_timer() {
+        // Or a node that joined late would wait for the coolant to move before
+        // it learned the temperature.
+        let mut fresh = Fresh::new();
+        assert!(fresh.worth_sending(0x26, 890, 20));
+        for _ in 0..(KEEPALIVE_MS / 20) - 1 {
+            assert!(!fresh.worth_sending(0x26, 890, 20), "quiet until it is due");
+        }
+        assert!(fresh.worth_sending(0x26, 890, 20), "and then again anyway");
+    }
+
+    #[test]
+    fn one_gauge_moving_does_not_send_another() {
+        let mut fresh = Fresh::new();
+        assert!(fresh.worth_sending(0x2D, 3000, 20));
+        assert!(fresh.worth_sending(0x26, 890, 20));
+        assert!(fresh.worth_sending(0x2D, 3200, 20), "revs moved");
+        assert!(!fresh.worth_sending(0x26, 890, 20), "coolant did not");
     }
 }

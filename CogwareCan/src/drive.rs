@@ -267,9 +267,14 @@ impl Car {
         };
         // What it is actually running chases that, and overshoots on a change
         // of throttle the way a real mixture does before the loop catches up.
+        //
+        // The wobble is added to the chased value, not accumulated onto it.
+        // Adding it every step made a random walk that the chase then fought,
+        // so the mixture moved every single frame -- and a reading that never
+        // holds still repaints its widget every frame, which is what put the
+        // gauge showing it on its knees.
         self.afr += (self.afr_target - self.afr) * dt * 4.0;
-        self.afr += sinf(self.at_s * 2.3) * 0.06;
-        self.afr = self.afr.clamp(10.5, 16.5);
+        self.afr = (self.afr + sinf(self.at_s * 1.1) * 0.04).clamp(10.5, 16.5);
 
         // Boost is asked for in proportion to how hard it is being driven,
         // and only once there are revs enough to make any.
@@ -420,6 +425,7 @@ mod tests {
         );
         assert!(car.reading(0xFFFF).is_none(), "and an unknown id is none");
     }
+
 
 
     #[test]
