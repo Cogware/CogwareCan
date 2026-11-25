@@ -2,13 +2,12 @@
 //! A node's side of the bus: the last state the master announced, and the
 //! frames this node sends back.
 
-use super::{
-    RadioFault, RADIO_FAULT_NONE,
-    message, BusState, CanFrame, Indicator, Opcode, LAMPS_PER_MSG, MODE_NORMAL, NODE_BROADCAST,
-    RADIO_BLUETOOTH, RADIO_OFF, RADIO_ON, RADIO_PAIR,
-};
 use super::pack_lamp;
 use super::Health;
+use super::{
+    message, BusState, CanFrame, Indicator, Opcode, RadioFault, LAMPS_PER_MSG, MODE_NORMAL,
+    NODE_BROADCAST, RADIO_BLUETOOTH, RADIO_FAULT_NONE, RADIO_OFF, RADIO_ON, RADIO_PAIR,
+};
 
 /// A node's view of the bus: the last state the master announced, and the
 /// frames this node sends back.
@@ -39,7 +38,9 @@ impl BusView {
     /// Feed every frame off the bus. Returns true if the state changed, which
     /// is the display's cue to redraw.
     pub fn feed(&mut self, f: &CanFrame) -> bool {
-        let Some(state) = BusState::parse(f) else { return false };
+        let Some(state) = BusState::parse(f) else {
+            return false;
+        };
         let changed = !self.synced || state != self.state;
         self.state = state;
         self.synced = true;
@@ -97,10 +98,7 @@ impl BusView {
 
     /// Ask the master to turn its Bluetooth radio on or off.
     pub fn request_bluetooth(&self, on: bool) -> Option<CanFrame> {
-        self.request_radio(
-            RADIO_BLUETOOTH,
-            if on { RADIO_ON } else { RADIO_OFF },
-        )
+        self.request_radio(RADIO_BLUETOOTH, if on { RADIO_ON } else { RADIO_OFF })
     }
 
     /// Ask the master to accept a new Bluetooth device, turning the radio on
@@ -137,7 +135,11 @@ impl BusView {
     /// Tell the master this node holds an image it may pull.
     pub fn offer_update(&self, kind: u8, size: u32) -> Option<CanFrame> {
         let s = size.to_le_bytes();
-        message(self.node, Opcode::UpdateOffer, &[kind, s[0], s[1], s[2], s[3]])
+        message(
+            self.node,
+            Opcode::UpdateOffer,
+            &[kind, s[0], s[1], s[2], s[3]],
+        )
     }
 
     /// Ask the master to re-announce the state, after a boot or a bus drop.
@@ -183,6 +185,17 @@ impl BusView {
     pub fn report_health(&self, health: &Health) -> Option<CanFrame> {
         let args = health.encode();
         message(self.node, Opcode::Health, &args)
+    }
+
+    /// Put a piece of this node's console on the bus, at most
+    /// [`super::CONSOLE_PER_MSG`] bytes of it.
+    pub fn report_console(&self, text: &[u8]) -> Option<CanFrame> {
+        message(self.node, Opcode::Console, text)
+    }
+
+    /// True if `f` is the master asking this node for its console again.
+    pub fn console_pulled(&self, f: &CanFrame) -> bool {
+        matches!(super::console_pull_target(f), Some(n) if n == self.node || n == NODE_BROADCAST)
     }
 
     /// Forget the announced state, so `is_synced` reports false again.

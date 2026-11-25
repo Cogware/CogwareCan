@@ -52,10 +52,12 @@
 //! carries the same `xfer` bytes the bus does, and the board that has the
 //! aerial is the board that knows how.
 
-use crate::indicators::{self, Indicator};
-use crate::protocol::{frame, id_of, msg_node, node_msg_id, BUS_STATE_ID, NODE_BROADCAST};
-use embedded_can::Frame;
 use crate::frame::CanFrame;
+use crate::indicators::{self, Indicator};
+use crate::protocol::{
+    frame, id_of, msg_node, node_msg_id, BUS_STATE_ID, CONSOLE_PULL_ID, NODE_BROADCAST,
+};
+use embedded_can::Frame;
 
 /// The mode every node starts in and falls back to.
 pub const MODE_NORMAL: u8 = 0;
@@ -224,6 +226,13 @@ pub enum Opcode {
     /// nothing but the readout, and a node sends it about once a second,
     /// which is one frame in the hundreds a busy bus already carries.
     Health = 7,
+    /// `[8, text..]` — up to [`CONSOLE_PER_MSG`] bytes of this node's console,
+    /// in the order it printed them.
+    ///
+    /// Diagnostics, like [`Opcode::Health`]: a display's UART is not reachable
+    /// once the car is together, so what it would have printed there travels
+    /// here and the master relays it to whichever host is listening.
+    Console = 8,
 }
 
 impl Opcode {
@@ -237,6 +246,7 @@ impl Opcode {
             5 => Opcode::Input,
             6 => Opcode::RadioRequest,
             7 => Opcode::Health,
+            8 => Opcode::Console,
             _ => return None,
         })
     }
@@ -289,6 +299,9 @@ pub const fn unpack_lamp(byte: u8) -> Option<(Indicator, bool)> {
         None => None,
     }
 }
+
+/// The most console text one `Console` message carries.
+pub const CONSOLE_PER_MSG: usize = 7;
 
 /// The bit of a packed lamp that nothing has spent yet.
 pub const SPARE_BIT: u8 = 1 << 6;
@@ -352,7 +365,12 @@ impl NodeMsg {
         let mut args = [0u8; 7];
         let len = (data.len() - 1).min(7);
         args[..len].copy_from_slice(&data[1..1 + len]);
-        Some(NodeMsg { node, opcode, args, len: len as u8 })
+        Some(NodeMsg {
+            node,
+            opcode,
+            args,
+            len: len as u8,
+        })
     }
 
     /// Everything after the opcode byte.
@@ -365,6 +383,15 @@ impl NodeMsg {
     pub fn health(&self) -> Option<Health> {
         match self.opcode {
             Opcode::Health => Health::decode(self.args()),
+            _ => None,
+        }
+    }
+
+    /// The console text this message carries, if it is a [`Opcode::Console`].
+    #[must_use]
+    pub fn console(&self) -> Option<&[u8]> {
+        match self.opcode {
+            Opcode::Console => Some(self.args()),
             _ => None,
         }
     }
@@ -437,6 +464,21 @@ pub fn message(node: u8, opcode: Opcode, args: &[u8]) -> Option<CanFrame> {
     frame(id, &buf[..1 + args.len()])
 }
 
+/// Build the frame the master sends to have `node` send its kept console
+/// again from the oldest byte it still holds. [`NODE_BROADCAST`] asks every
+/// node at once.
+pub fn console_pull(node: u8) -> Option<CanFrame> {
+    frame(CONSOLE_PULL_ID, &[node])
+}
+
+/// The node a console pull is addressed to, or `None` if `f` is not one.
+pub fn console_pull_target(f: &CanFrame) -> Option<u8> {
+    if id_of(f)? != CONSOLE_PULL_ID {
+        return None;
+    }
+    f.data()[..f.dlc()].first().copied()
+}
+
 /// What the master says the bus is doing.
 ///
 /// Travels as `[mode, flags, progress, target, radio]`.
@@ -485,7 +527,11 @@ impl BusState {
             // as "every radio off", which is both the truth about that master
             // and the safe way to be wrong: a node may then ask for one, and
             // a master that cannot answer simply does not.
-            radio: if f.dlc() > RADIO_BYTE { d[RADIO_BYTE] } else { 0 },
+            radio: if f.dlc() > RADIO_BYTE {
+                d[RADIO_BYTE]
+            } else {
+                0
+            },
             radio_fault: if f.dlc() > RADIO_FAULT_BYTE {
                 d[RADIO_FAULT_BYTE]
             } else {

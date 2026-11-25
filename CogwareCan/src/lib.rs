@@ -68,17 +68,17 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod blink;
 pub mod bus;
 pub mod config;
+pub mod console;
 pub mod crc;
 pub mod decode;
+pub mod drive;
 pub mod ecumaster;
 pub mod frame;
 mod gauge;
 pub mod haltech;
-pub mod blink;
-pub mod drive;
-pub mod trace;
 pub mod indicators;
 pub mod ingest;
 pub mod link;
@@ -89,6 +89,7 @@ pub mod pack;
 pub mod rusefi;
 pub mod speeduino;
 pub mod subscribe;
+pub mod trace;
 pub mod units;
 pub mod wire;
 pub mod xfer;
@@ -96,9 +97,9 @@ pub mod xfer;
 pub use decode::CanSource;
 pub use frame::CanFrame;
 pub use gauge::*;
-pub use pack::Wire;
 pub use ingest::{ingest, Fed};
 pub use link::{Link, NbLink, RecvError, SendError};
+pub use pack::Wire;
 pub use units::{Quantity, Reading, Unit};
 
 /// Every CAN-broadcast ECU this crate understands. A server that does not
@@ -124,7 +125,8 @@ use embedded_can::{Frame, Id, StandardId};
 ///
 /// Inside the reserved range: 0x000 master ack, 0x001..=0x00F one message ID
 /// per node (see `bus`), 0x010..=0x012 file transfer (see `xfer`), 0x015
-/// client subscribe request, 0x018 bus state. A node's message ID *is* its
+/// client subscribe request, 0x016 console pull, 0x018 bus state. A node's
+/// message ID *is* its
 /// node address, so two nodes never contend for one ID and the lower address
 /// wins arbitration. Every reserved ID sits below every gauge ID, so control
 /// traffic pre-empts a gauge broadcast already in flight.
@@ -145,6 +147,9 @@ pub mod protocol {
     pub const BUS_STATE_ID: u16 = 0x018;
     /// Client asks the server to start broadcasting gauges; payload is up to 8 gauge IDs.
     pub const CLIENT_REQUEST_ID: u16 = 0x015;
+    /// Master asks a node to send its kept console again; payload is the node
+    /// address, or [`NODE_BROADCAST`] for all of them. See `bus`.
+    pub const CONSOLE_PULL_ID: u16 = 0x016;
     /// First ID available to gauges.
     pub const GAUGE_ID_MIN: u16 = 0x020;
     /// Top of the gauge range. Gauge IDs travel as single bytes in a
@@ -234,7 +239,11 @@ pub enum FeedError {
     /// No gauge is defined at this ID (protocol frames land here too).
     UnknownId(u16),
     /// Payload length does not match the gauge's wire width.
-    BadLength { id: u16, expected: usize, got: usize },
+    BadLength {
+        id: u16,
+        expected: usize,
+        got: usize,
+    },
 }
 
 /// Store an incoming gauge frame. Frames that are not gauges are rejected,
@@ -247,11 +256,9 @@ pub fn feed_frame(frame: &CanFrame) -> Result<&'static GaugeData, FeedError> {
     let gauge = gauge_by_id(id).ok_or(FeedError::UnknownId(id))?;
     gauge
         .set_from_frame(frame)
-        .map_err(|FrameError::BadLength { expected, got }| FeedError::BadLength {
-            id,
-            expected,
-            got,
-        })?;
+        .map_err(
+            |FrameError::BadLength { expected, got }| FeedError::BadLength { id, expected, got },
+        )?;
     Ok(gauge)
 }
 
