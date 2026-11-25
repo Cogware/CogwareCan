@@ -227,7 +227,6 @@ fn crc16_continue(mut crc: u16, data: &[u8]) -> u16 {
     crc
 }
 
-
 // ===================== what the frames carry =====================
 
 /// A host pushing an image announces it with one of these.
@@ -346,7 +345,6 @@ impl Report {
     }
 }
 
-
 /// The host asks for a [`KIND_STATUS`] frame with one of these.
 pub const KIND_PING: u8 = 0x10;
 /// And the server answers with this.
@@ -454,7 +452,6 @@ impl Status {
     }
 }
 
-
 /// The server's account of every gauge it currently holds a value for.
 ///
 /// Sent as one or more parts. The payload is a [`Readings`] header byte
@@ -475,6 +472,67 @@ pub const KIND_READINGS: u8 = 0x81;
 /// bus, passed through rather than re-encoded: the server is a post office
 /// here, not a translator.
 pub const KIND_HEALTH: u8 = 0x83;
+
+/// The host asks for a node's kept console again: `[node]`, where 0xFF is
+/// every node. The server passes it to the bus and the text comes back as
+/// [`KIND_CONSOLE`].
+pub const KIND_CONSOLE_PULL: u8 = 0x13;
+
+/// The host asks the server to look for its storage card again. No payload.
+pub const KIND_SD_PROBE: u8 = 0x14;
+
+/// The host tells the server which network to join. See [`encode_network`].
+pub const KIND_NETWORK: u8 = 0x15;
+
+/// The server's card diagnostic: three bytes describing what the card's data
+/// line did during one command.
+pub const KIND_SD_DETAIL: u8 = 0x85;
+
+/// Longest network name, in bytes: 802.11's own limit.
+pub const SSID_MAX: usize = 32;
+/// Longest passphrase, in bytes: WPA2's own limit.
+pub const PASSPHRASE_MAX: usize = 63;
+
+/// Write a [`KIND_NETWORK`] payload into `out`: the name, a zero byte, then
+/// the passphrase. `None` if either is out of range or holds a zero, which
+/// would move the boundary between them.
+pub fn encode_network(ssid: &str, passphrase: &str, out: &mut [u8]) -> Option<usize> {
+    let len = ssid.len() + 1 + passphrase.len();
+    if ssid.is_empty()
+        || ssid.len() > SSID_MAX
+        || passphrase.len() > PASSPHRASE_MAX
+        || ssid.contains('\0')
+        || passphrase.contains('\0')
+    {
+        return None;
+    }
+    let out = out.get_mut(..len)?;
+    out[..ssid.len()].copy_from_slice(ssid.as_bytes());
+    out[ssid.len()] = 0;
+    out[ssid.len() + 1..].copy_from_slice(passphrase.as_bytes());
+    Some(len)
+}
+
+/// Read a [`KIND_NETWORK`] payload back as its name and passphrase. `None`
+/// for anything [`encode_network`] would not have written.
+pub fn decode_network(payload: &[u8]) -> Option<(&str, &str)> {
+    let split = payload.iter().position(|b| *b == 0)?;
+    let ssid = core::str::from_utf8(&payload[..split]).ok()?;
+    let passphrase = core::str::from_utf8(&payload[split + 1..]).ok()?;
+    if ssid.is_empty()
+        || ssid.len() > SSID_MAX
+        || passphrase.len() > PASSPHRASE_MAX
+        || passphrase.contains('\0')
+    {
+        return None;
+    }
+    Some((ssid, passphrase))
+}
+
+/// A node's console text, relayed by the server: `[node, text..]`. Several
+/// [`crate::bus::Opcode::Console`] messages may be joined into one of these,
+/// in order, so the text is a stream and not a line.
+pub const KIND_CONSOLE: u8 = 0x84;
 
 /// The header byte at the front of a [`KIND_READINGS`] payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -581,8 +639,7 @@ pub fn samples(payload: &[u8]) -> impl Iterator<Item = Sample> + '_ {
 pub const SAMPLES_PER_FRAME: usize = 32;
 
 /// The whole of one part: header, samples, and the frame around them.
-pub const READINGS_FRAME: usize =
-    OVERHEAD + READINGS_HEADER + SAMPLES_PER_FRAME * SAMPLE_LEN;
+pub const READINGS_FRAME: usize = OVERHEAD + READINGS_HEADER + SAMPLES_PER_FRAME * SAMPLE_LEN;
 
 /// How many gauges a whole set can carry, across every part.
 ///
@@ -605,21 +662,108 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_network_survives_the_trip_through_its_payload() {
+        let mut buf = [0u8; SSID_MAX + 1 + PASSPHRASE_MAX];
+        let n = encode_network("bench", "correct horse", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"bench\0correct horse");
+        assert_eq!(decode_network(&buf[..n]), Some(("bench", "correct horse")));
+        // An open network has no passphrase, and the zero is still there.
+        let n = encode_network("open", "", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"open\0");
+        assert_eq!(decode_network(&buf[..n]), Some(("open", "")));
+    }
+
+    #[test]
+    fn a_network_at_the_limits_fits_and_one_past_them_does_not() {
+        let mut buf = [0u8; SSID_MAX + 1 + PASSPHRASE_MAX];
+        let (name, pass) = ("n".repeat(SSID_MAX), "p".repeat(PASSPHRASE_MAX));
+        let n = encode_network(&name, &pass, &mut buf).unwrap();
+        assert_eq!(n, buf.len());
+        assert_eq!(decode_network(&buf), Some((name.as_str(), pass.as_str())));
+
+        assert_eq!(
+            encode_network(&"n".repeat(SSID_MAX + 1), "", &mut buf),
+            None
+        );
+        assert_eq!(
+            encode_network("n", &"p".repeat(PASSPHRASE_MAX + 1), &mut buf),
+            None
+        );
+        assert_eq!(encode_network("", "p", &mut buf), None);
+        assert_eq!(encode_network("a\0b", "p", &mut buf), None);
+        assert_eq!(encode_network("a", "p\0q", &mut buf), None);
+        assert_eq!(encode_network("bench", "pass", &mut buf[..9]), None);
+    }
+
+    #[test]
+    fn a_malformed_network_payload_is_refused() {
+        assert_eq!(decode_network(b""), None);
+        assert_eq!(decode_network(b"no separator"), None);
+        assert_eq!(decode_network(b"\0pass"), None, "no name");
+        assert_eq!(decode_network(b"a\0b\0c"), None, "a second zero");
+        assert_eq!(decode_network(b"\xff\0pass"), None, "not UTF-8");
+        let long = [b'n'; SSID_MAX + 2];
+        let mut payload = long.to_vec();
+        payload[SSID_MAX + 1] = 0;
+        assert_eq!(decode_network(&payload), None, "a name one byte too long");
+    }
+
+    #[test]
+    fn no_two_kinds_share_a_number() {
+        // A server tells frames apart by this byte alone, so two meanings on
+        // one number is one of them silently lost.
+        let kinds = [
+            KIND_PING,
+            KIND_CONSOLE_PULL,
+            KIND_SD_PROBE,
+            KIND_NETWORK,
+            KIND_XFER_BEGIN,
+            KIND_XFER_DATA,
+            KIND_XFER_ABORT,
+            KIND_STATUS,
+            KIND_READINGS,
+            KIND_XFER_REPORT,
+            KIND_HEALTH,
+            KIND_CONSOLE,
+            KIND_SD_DETAIL,
+        ];
+        for (i, kind) in kinds.iter().enumerate() {
+            assert!(!kinds[..i].contains(kind), "{kind:#04x} is used twice");
+        }
+    }
+
+    #[test]
     fn a_sample_survives_the_trip_through_its_entry() {
         // A negative count, because a gauge below its zero is a real reading
         // and the sign is the difference between cold and broken.
-        let s = Sample { id: 0x025, raw: -400 };
+        let s = Sample {
+            id: 0x025,
+            raw: -400,
+        };
         assert_eq!(Sample::decode(&s.encode()), Some(s));
     }
 
     #[test]
     fn a_payload_yields_every_gauge_in_it() {
         let want = [
-            Sample { id: 0x024, raw: 1013 },
-            Sample { id: 0x025, raw: -400 },
-            Sample { id: 0x030, raw: 6500 },
+            Sample {
+                id: 0x024,
+                raw: 1013,
+            },
+            Sample {
+                id: 0x025,
+                raw: -400,
+            },
+            Sample {
+                id: 0x030,
+                raw: 6500,
+            },
         ];
-        let mut payload = vec![Readings { part: 0, last: true }.encode()];
+        let mut payload = vec![Readings {
+            part: 0,
+            last: true,
+        }
+        .encode()];
         for s in want {
             payload.extend_from_slice(&s.encode());
         }
@@ -631,8 +775,16 @@ mod tests {
     fn a_frame_cut_short_drops_the_part_entry_rather_than_guessing() {
         // Inventing a value for a sensor is the one mistake this message
         // exists to avoid.
-        let whole = Sample { id: 0x024, raw: 1013 }.encode();
-        let mut payload = vec![Readings { part: 0, last: true }.encode()];
+        let whole = Sample {
+            id: 0x024,
+            raw: 1013,
+        }
+        .encode();
+        let mut payload = vec![Readings {
+            part: 0,
+            last: true,
+        }
+        .encode()];
         payload.extend_from_slice(&whole);
         payload.extend_from_slice(&whole[..3]);
         let got: Vec<_> = samples(&payload).collect();
@@ -645,7 +797,15 @@ mod tests {
         // A payload of nothing but a header is what a server with nothing set
         // sends, and it is a real answer: it says the car is quiet, not that
         // the link is.
-        assert_eq!(samples(&[Readings { part: 0, last: true }.encode()]).count(), 0);
+        assert_eq!(
+            samples(&[Readings {
+                part: 0,
+                last: true
+            }
+            .encode()])
+            .count(),
+            0
+        );
         // And a payload of nothing at all still yields nothing rather than
         // reading past its end.
         assert_eq!(samples(&[]).count(), 0);
@@ -665,8 +825,14 @@ mod tests {
 
     #[test]
     fn a_set_reassembles_from_its_parts() {
-        let first = Readings { part: 0, last: false };
-        let last = Readings { part: 1, last: true };
+        let first = Readings {
+            part: 0,
+            last: false,
+        };
+        let last = Readings {
+            part: 1,
+            last: true,
+        };
         assert_eq!(Readings::decode(&[first.encode()]), Some(first));
         assert_eq!(Readings::decode(&[last.encode()]), Some(last));
         // An empty payload is no part at all, which is different from a part
@@ -676,12 +842,27 @@ mod tests {
 
     #[test]
     fn the_header_is_not_read_as_a_gauge() {
-        let mut payload = vec![Readings { part: 0, last: true }.encode()];
-        payload.extend_from_slice(&Sample { id: 0x24, raw: 1013 }.encode());
+        let mut payload = vec![Readings {
+            part: 0,
+            last: true,
+        }
+        .encode()];
+        payload.extend_from_slice(
+            &Sample {
+                id: 0x24,
+                raw: 1013,
+            }
+            .encode(),
+        );
         let got: Vec<Sample> = samples(&payload).collect();
-        assert_eq!(got, vec![Sample { id: 0x24, raw: 1013 }]);
+        assert_eq!(
+            got,
+            vec![Sample {
+                id: 0x24,
+                raw: 1013
+            }]
+        );
     }
-
 
     #[test]
     fn a_status_survives_the_trip_through_its_payload() {
@@ -707,10 +888,15 @@ mod tests {
         assert_eq!(Status::decode(&good[..STATUS_LEN - 1]), None);
     }
 
-
     #[test]
     fn a_target_survives_the_trip_through_a_begin_payload() {
-        let t = Target { node: 2, kind: 1, slot: 0, size: 862_832, crc: 0x99C4_433F };
+        let t = Target {
+            node: 2,
+            kind: 1,
+            slot: 0,
+            size: 862_832,
+            crc: 0x99C4_433F,
+        };
         assert_eq!(Target::decode(&t.encode()), Some(t));
     }
 
@@ -755,7 +941,6 @@ mod tests {
     fn a_truncated_report_is_refused_rather_than_read_past() {
         assert_eq!(Report::decode(&[0u8; REPORT_LEN - 1]), None);
     }
-
 
     fn feed(dec: &mut Decoder, bytes: &[u8]) -> Option<(u8, usize)> {
         let mut last = None;
