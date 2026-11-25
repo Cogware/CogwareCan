@@ -15,7 +15,9 @@ fn every_key_is_unique_and_fits_a_record() {
         assert!(seen.insert(s.key), "{} is used twice", s.key);
         assert!(!s.key.is_empty() && s.key.len() <= config::KEY_MAX);
         assert!(
-            s.key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_' || b.is_ascii_digit()),
+            s.key
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'_' || b.is_ascii_digit()),
             "{} is not a plain lowercase key",
             s.key
         );
@@ -31,7 +33,12 @@ fn the_table_describes_itself_consistently() {
             // A choice's range must index its labels exactly, or an editor
             // offers an option that stores a value the node will clamp away.
             Kind::Choice => {
-                assert_eq!((s.min, s.max as usize), (0, s.choices.len() - 1), "{}", s.key);
+                assert_eq!(
+                    (s.min, s.max as usize),
+                    (0, s.choices.len() - 1),
+                    "{}",
+                    s.key
+                );
             }
             Kind::Toggle => {
                 assert_eq!((s.min, s.max), (0, 1), "{}", s.key);
@@ -153,7 +160,10 @@ fn a_malformed_blob_is_refused_rather_than_half_applied() {
 
     let mut wrong = buf.clone();
     wrong[4] = config::VERSION + 1;
-    assert_eq!(config::decode(&wrong), Err(ConfigError::BadVersion(config::VERSION + 1)));
+    assert_eq!(
+        config::decode(&wrong),
+        Err(ConfigError::BadVersion(config::VERSION + 1))
+    );
 
     // A record that runs off the end is a truncation, not a silent stop.
     assert_eq!(config::decode(&buf[..n - 2]), Err(ConfigError::Truncated));
@@ -162,7 +172,10 @@ fn a_malformed_blob_is_refused_rather_than_half_applied() {
     let mut small = [0u8; 8];
     assert_eq!(
         config::encode(&mut small),
-        Err(ConfigError::TooSmall { needed: config::blob_len(), got: 8 })
+        Err(ConfigError::TooSmall {
+            needed: config::blob_len(),
+            got: 8
+        })
     );
 }
 
@@ -189,11 +202,21 @@ fn a_blob_rides_the_transfer_path_as_a_config_image() {
         }
     }
     assert_eq!(tx.state(), TxState::Done);
-    assert_eq!(rx.image(), Image { size: n as u32, kind: kind::CONFIG, slot: 0 });
+    assert_eq!(
+        rx.image(),
+        Image {
+            size: n as u32,
+            kind: kind::CONFIG,
+            slot: 0
+        }
+    );
 
     config::reset_all();
     let received = rx.sink().buf.to_vec();
-    assert_eq!(config::decode(&received).unwrap().applied, config::ALL_SETTINGS.len());
+    assert_eq!(
+        config::decode(&received).unwrap().applied,
+        config::ALL_SETTINGS.len()
+    );
     assert_eq!(config::WARN_OIL_PRESSURE.get(), 1500);
 }
 
@@ -214,7 +237,10 @@ fn the_description_is_json_an_editor_can_parse() {
     assert!(json.contains(r#""key":"brightness","kind":"number""#));
     assert!(json.contains(r#""default":800,"value":640"#));
     assert!(json.contains(r#""choices":["km/h","mph"]"#));
-    assert!(json.contains(r#""scale":10"#), "an editor needs the fixed-point scale");
+    assert!(
+        json.contains(r#""scale":10"#),
+        "an editor needs the fixed-point scale"
+    );
 
     // Quotes are balanced, which is what an unescaped symbol or doc would break.
     assert_eq!(json.matches('"').count() % 2, 0);
@@ -229,9 +255,15 @@ fn a_unit_symbol_survives_the_description_intact() {
 
     // The degree sign is the only non-ASCII character the table reaches, so
     // it is what a byte-wise writer would mangle.
-    assert!(json.contains("\"unit\":\"\u{b0}C\""), "the degree sign came through");
+    assert!(
+        json.contains("\"unit\":\"\u{b0}C\""),
+        "the degree sign came through"
+    );
     assert!(json.contains("\"unit\":\"rpm\""));
-    assert!(json.contains("\"unit\":\"\""), "a RAW row has an empty symbol");
+    assert!(
+        json.contains("\"unit\":\"\""),
+        "a RAW row has an empty symbol"
+    );
 
     // Nothing in the table needs escaping today, which is why the JSON holds
     // no backslash at all; the escaper is there for a doc line that later does.

@@ -11,9 +11,9 @@
 
 use crate::decode::{apply_fields, conv::*, Field};
 use crate::field;
+use crate::frame::CanFrame;
 use crate::protocol::{frame, id_of};
 use embedded_can::Frame;
-use crate::frame::CanFrame;
 
 /// Functional request ID every ECU listens on.
 pub const REQUEST_ID: u16 = 0x7DF;
@@ -86,28 +86,94 @@ static PA6: &[Field] = &[field!(0, U32BE, ODOMETER, raw)];
 
 /// Every PID this converter decodes, in a sensible polling order.
 pub static PIDS: &[Pid] = &[
-    Pid { pid: 0x0C, fields: P0C },
-    Pid { pid: 0x0B, fields: P0B },
-    Pid { pid: 0x11, fields: P11 },
-    Pid { pid: 0x0E, fields: P0E },
-    Pid { pid: 0x05, fields: P05 },
-    Pid { pid: 0x0F, fields: P0F },
-    Pid { pid: 0x0D, fields: P0D },
-    Pid { pid: 0x42, fields: P42 },
-    Pid { pid: 0x44, fields: P44 },
-    Pid { pid: 0x06, fields: P06 },
-    Pid { pid: 0x04, fields: P04 },
-    Pid { pid: 0x33, fields: P33 },
-    Pid { pid: 0x0A, fields: P0A },
-    Pid { pid: 0x23, fields: P23 },
-    Pid { pid: 0x2F, fields: P2F },
-    Pid { pid: 0x52, fields: P52 },
-    Pid { pid: 0x5A, fields: P5A },
-    Pid { pid: 0x5C, fields: P5C },
-    Pid { pid: 0x78, fields: P78 },
-    Pid { pid: 0x1F, fields: P1F },
-    Pid { pid: 0x01, fields: P01 },
-    Pid { pid: 0xA6, fields: PA6 },
+    Pid {
+        pid: 0x0C,
+        fields: P0C,
+    },
+    Pid {
+        pid: 0x0B,
+        fields: P0B,
+    },
+    Pid {
+        pid: 0x11,
+        fields: P11,
+    },
+    Pid {
+        pid: 0x0E,
+        fields: P0E,
+    },
+    Pid {
+        pid: 0x05,
+        fields: P05,
+    },
+    Pid {
+        pid: 0x0F,
+        fields: P0F,
+    },
+    Pid {
+        pid: 0x0D,
+        fields: P0D,
+    },
+    Pid {
+        pid: 0x42,
+        fields: P42,
+    },
+    Pid {
+        pid: 0x44,
+        fields: P44,
+    },
+    Pid {
+        pid: 0x06,
+        fields: P06,
+    },
+    Pid {
+        pid: 0x04,
+        fields: P04,
+    },
+    Pid {
+        pid: 0x33,
+        fields: P33,
+    },
+    Pid {
+        pid: 0x0A,
+        fields: P0A,
+    },
+    Pid {
+        pid: 0x23,
+        fields: P23,
+    },
+    Pid {
+        pid: 0x2F,
+        fields: P2F,
+    },
+    Pid {
+        pid: 0x52,
+        fields: P52,
+    },
+    Pid {
+        pid: 0x5A,
+        fields: P5A,
+    },
+    Pid {
+        pid: 0x5C,
+        fields: P5C,
+    },
+    Pid {
+        pid: 0x78,
+        fields: P78,
+    },
+    Pid {
+        pid: 0x1F,
+        fields: P1F,
+    },
+    Pid {
+        pid: 0x01,
+        fields: P01,
+    },
+    Pid {
+        pid: 0xA6,
+        fields: PA6,
+    },
 ];
 
 /// Mode 01 request for `pid`.

@@ -2,9 +2,9 @@
 //! Gauge subscriptions: what displays ask for and what the master sends back.
 
 use cogware_can::subscribe::*;
+use cogware_can::CanFrame;
 use cogware_can::*;
 use embedded_can::Frame;
-use cogware_can::CanFrame;
 
 mod common;
 use common::bus;
@@ -45,16 +45,23 @@ fn publisher_records_and_acknowledges() {
     let mut p = Publisher::new();
     assert!(p.is_empty());
 
-    let acks: Vec<CanFrame> = p.feed(&protocol::request_frame(&WANTED[..8]).unwrap()).collect();
+    let acks: Vec<CanFrame> = p
+        .feed(&protocol::request_frame(&WANTED[..8]).unwrap())
+        .collect();
     assert_eq!(acks.len(), 8, "one ack per requested ID");
     assert!(acks.iter().all(protocol::is_ack));
-    assert_eq!(acks.iter().map(|f| f.data()[0]).collect::<Vec<_>>(), WANTED[..8].to_vec());
+    assert_eq!(
+        acks.iter().map(|f| f.data()[0]).collect::<Vec<_>>(),
+        WANTED[..8].to_vec()
+    );
     assert_eq!(p.len(), 8);
     assert!(p.wanted().contains(0x2D));
 
     // A repeat request is acknowledged again, so a display that missed an ack
     // can retry, but nothing is recorded twice.
-    let again: Vec<CanFrame> = p.feed(&protocol::request_frame(&WANTED[..8]).unwrap()).collect();
+    let again: Vec<CanFrame> = p
+        .feed(&protocol::request_frame(&WANTED[..8]).unwrap())
+        .collect();
     assert_eq!(again.len(), 8);
     assert_eq!(p.len(), 8);
 }
@@ -80,7 +87,9 @@ fn unknown_ids_are_acknowledged_but_never_broadcast() {
     let mut p = Publisher::new();
     // 0xF0 names no gauge in this build, as it would not in a display running
     // an older spec. The master still answers, so that display stops asking.
-    let acks: Vec<CanFrame> = p.feed(&protocol::request_frame(&[0x2D, 0xF0]).unwrap()).collect();
+    let acks: Vec<CanFrame> = p
+        .feed(&protocol::request_frame(&[0x2D, 0xF0]).unwrap())
+        .collect();
     assert_eq!(acks.len(), 2);
     assert_eq!(p.len(), 1, "only the real gauge is recorded");
     assert!(!p.wanted().contains(0xF0));
@@ -92,9 +101,14 @@ fn unknown_ids_are_acknowledged_but_never_broadcast() {
 fn broadcast_skips_gauges_that_were_never_written() {
     let _bus = bus();
     let mut p = Publisher::new();
-    p.feed(&protocol::request_frame(&WANTED[..8]).unwrap()).count();
+    p.feed(&protocol::request_frame(&WANTED[..8]).unwrap())
+        .count();
 
-    assert_eq!(p.broadcast().count(), 0, "nothing set yet, so nothing to send");
+    assert_eq!(
+        p.broadcast().count(),
+        0,
+        "nothing set yet, so nothing to send"
+    );
 
     RPM.set(3500);
     MAP.set(950);
@@ -102,7 +116,10 @@ fn broadcast_skips_gauges_that_were_never_written() {
     assert_eq!(frames.len(), 2);
     // Lowest ID first: MAP is 0x24, RPM is 0x2D.
     assert_eq!(
-        frames.iter().map(|f| protocol::id_of(f).unwrap()).collect::<Vec<_>>(),
+        frames
+            .iter()
+            .map(|f| protocol::id_of(f).unwrap())
+            .collect::<Vec<_>>(),
         vec![Gauge::Map.id(), Gauge::Rpm.id()]
     );
     // And the frames carry the values a display would read back.
@@ -144,12 +161,21 @@ fn subscription_asks_in_frame_sized_chunks() {
 #[test]
 fn subscription_ignores_acks_it_did_not_ask_for() {
     let mut s = Subscription::new(&WANTED);
-    assert!(!s.feed(&protocol::ack_frame(0x5A).unwrap()), "not on our list");
-    assert!(!s.feed(&protocol::request_frame(&[0x2D]).unwrap()), "not an ack");
+    assert!(
+        !s.feed(&protocol::ack_frame(0x5A).unwrap()),
+        "not on our list"
+    );
+    assert!(
+        !s.feed(&protocol::request_frame(&[0x2D]).unwrap()),
+        "not an ack"
+    );
     assert!(!s.feed(&protocol::frame(Gauge::Rpm.id(), &[0, 1]).unwrap()));
     assert_eq!(s.pending(), 9);
     assert!(s.feed(&protocol::ack_frame(0x2D).unwrap()));
-    assert!(!s.feed(&protocol::ack_frame(0x2D).unwrap()), "already acknowledged");
+    assert!(
+        !s.feed(&protocol::ack_frame(0x2D).unwrap()),
+        "already acknowledged"
+    );
     assert_eq!(s.pending(), 8);
     s.reset();
     assert_eq!(s.pending(), 9);
@@ -212,6 +238,10 @@ fn the_guard_isolates_tests_from_each_other() {
         assert_eq!(ALL_GAUGES.iter().filter(|g| g.is_set()).count(), 2);
     }
     let _bus = bus();
-    let dirty: Vec<&str> = ALL_GAUGES.iter().filter(|g| g.is_set()).map(|g| g.name).collect();
+    let dirty: Vec<&str> = ALL_GAUGES
+        .iter()
+        .filter(|g| g.is_set())
+        .map(|g| g.name)
+        .collect();
     assert!(dirty.is_empty(), "state survived the guard: {dirty:?}");
 }

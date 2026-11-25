@@ -35,11 +35,7 @@ pub const HALF_PERIOD_US: u64 = 1_000_000 / 3;
 
 /// The lamps that flash unless told otherwise: the two turn signals and the
 /// hazards, which are the only ones on a car that a steady bulb would misreport.
-pub const DEFAULT: &[Indicator] = &[
-    Indicator::TurnLeft,
-    Indicator::TurnRight,
-    Indicator::Hazard,
-];
+pub const DEFAULT: &[Indicator] = &[Indicator::TurnLeft, Indicator::TurnRight, Indicator::Hazard];
 
 /// What has been asked for, and which of it flashes.
 ///

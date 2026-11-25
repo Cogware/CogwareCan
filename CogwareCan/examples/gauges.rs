@@ -24,7 +24,12 @@ fn main() {
     println!("\nreadings in canonical units");
     for g in [&RPM, &MAP, &CLNT, &AFR_PRI, &VSS, &BAT_VOL] {
         // as_f32 divides out the scale; the unit symbol comes from the spec.
-        println!("  {:<8} {:>8.2} {}", g.name, g.as_f32().unwrap(), g.unit.symbol);
+        println!(
+            "  {:<8} {:>8.2} {}",
+            g.name,
+            g.as_f32().unwrap(),
+            g.unit.symbol
+        );
     }
 
     // Conversions are checked against the gauge's physical dimension.
@@ -33,9 +38,15 @@ fn main() {
     println!("  MAP      {:>8.3} bar", MAP.to(Unit::BAR).unwrap());
     println!("  CLNT     {:>8.1} °F", CLNT.to(Unit::FAHRENHEIT).unwrap());
     println!("  VSS      {:>8.1} mph", VSS.to(Unit::MPH).unwrap());
-    println!("  AFR_PRI  {:>8.3} lambda", AFR_PRI.reading().unwrap().lambda().unwrap());
+    println!(
+        "  AFR_PRI  {:>8.3} lambda",
+        AFR_PRI.reading().unwrap().lambda().unwrap()
+    );
     // E85 has a different stoichiometric ratio, so lambda differs.
-    println!("  AFR_PRI  {:>8.3} lambda on E85", AFR_PRI.reading().unwrap().lambda_for(9.8).unwrap());
+    println!(
+        "  AFR_PRI  {:>8.3} lambda on E85",
+        AFR_PRI.reading().unwrap().lambda_for(9.8).unwrap()
+    );
 
     // Asking for the wrong dimension gives None rather than a wrong number.
     println!("\nMAP in °C:      {:?}", MAP.to(Unit::CELSIUS));
@@ -44,9 +55,23 @@ fn main() {
     // Source says which kind of ECU can supply a gauge, so a display knows
     // whether a missing value is a fault or simply unsupported.
     println!("\ngauges by source tier");
-    for tier in [Source::Common, Source::Standalone, Source::Speeduino, Source::Protocol] {
-        let names: Vec<&str> = ALL_GAUGES.iter().filter(|g| g.source == tier).map(|g| g.name).collect();
-        println!("  {:?} ({}): {}", tier, names.len(), names[..5.min(names.len())].join(", "));
+    for tier in [
+        Source::Common,
+        Source::Standalone,
+        Source::Speeduino,
+        Source::Protocol,
+    ] {
+        let names: Vec<&str> = ALL_GAUGES
+            .iter()
+            .filter(|g| g.source == tier)
+            .map(|g| g.name)
+            .collect();
+        println!(
+            "  {:?} ({}): {}",
+            tier,
+            names.len(),
+            names[..5.min(names.len())].join(", ")
+        );
     }
     println!("\ntotal gauges in the spec: {}", ALL_GAUGES.len());
 }

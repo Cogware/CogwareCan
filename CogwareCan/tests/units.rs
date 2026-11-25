@@ -89,7 +89,12 @@ fn unit_convert_is_symmetric() {
     ] {
         let there = a.convert(v, b).unwrap();
         let back = b.convert(there, a).unwrap();
-        assert!((back - v).abs() < 0.001, "{} -> {} -> back", a.symbol, b.symbol);
+        assert!(
+            (back - v).abs() < 0.001,
+            "{} -> {} -> back",
+            a.symbol,
+            b.symbol
+        );
     }
 }
 
@@ -111,7 +116,10 @@ fn gps_speed_converts_like_any_other_speed() {
     let _bus = bus();
     GPS_SPEED.set(880); // 88.0 km/h
     assert!(close(GPS_SPEED.to(Unit::MPH), 54.68));
-    assert_eq!(GPS_SPEED.unit, VSS.unit, "so a scene can swap one for the other");
+    assert_eq!(
+        GPS_SPEED.unit, VSS.unit,
+        "so a scene can swap one for the other"
+    );
     // Distance is a different dimension, so it does not convert.
     assert_eq!(GPS_SPEED.to(Unit::KILOMETRES), None);
 }

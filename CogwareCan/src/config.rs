@@ -265,7 +265,10 @@ pub fn blob_len() -> usize {
 pub fn encode(out: &mut [u8]) -> Result<usize, ConfigError> {
     let needed = blob_len();
     if out.len() < needed {
-        return Err(ConfigError::TooSmall { needed, got: out.len() });
+        return Err(ConfigError::TooSmall {
+            needed,
+            got: out.len(),
+        });
     }
     out[..4].copy_from_slice(&MAGIC);
     out[4] = VERSION;
@@ -331,12 +334,21 @@ pub fn describe<W: Write>(w: &mut W) -> core::fmt::Result {
         if i > 0 {
             w.write_char(',')?;
         }
-        write!(w, r#"{{"key":"{}","kind":"{}","unit":""#, s.key, s.kind.name())?;
+        write!(
+            w,
+            r#"{{"key":"{}","kind":"{}","unit":""#,
+            s.key,
+            s.kind.name()
+        )?;
         escape(w, s.unit.symbol)?;
         write!(
             w,
             r#"","scale":{},"min":{},"max":{},"default":{},"value":{},"choices":["#,
-            s.unit.scale, s.min, s.max, s.default, s.get()
+            s.unit.scale,
+            s.min,
+            s.max,
+            s.default,
+            s.get()
         )?;
         for (j, c) in s.choices.iter().enumerate() {
             if j > 0 {

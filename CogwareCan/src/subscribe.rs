@@ -25,10 +25,10 @@
 //! for f in publisher.broadcast() { can.send_message(f).ok(); }
 //! ```
 
+use crate::frame::CanFrame;
 use crate::protocol::{ack_frame, is_ack, is_request, request_frame};
 use crate::{frame_for, gauge_by_id};
 use embedded_can::Frame;
-use crate::frame::CanFrame;
 
 /// Gauge IDs that fit in one request frame.
 pub const IDS_PER_FRAME: usize = 8;
@@ -75,7 +75,10 @@ impl IdSet {
     }
 
     pub fn iter(&self) -> IdIter {
-        IdIter { set: *self, next: 0 }
+        IdIter {
+            set: *self,
+            next: 0,
+        }
     }
 }
 
@@ -126,7 +129,9 @@ pub struct Publisher {
 
 impl Publisher {
     pub const fn new() -> Self {
-        Publisher { wanted: IdSet::new() }
+        Publisher {
+            wanted: IdSet::new(),
+        }
     }
 
     /// Feed every frame off the bus. Requests are recorded and the returned
@@ -177,12 +182,19 @@ impl Publisher {
     /// A gauge that has never been written yields no frame, so a display can
     /// tell "this ECU does not supply it" from "the value is zero".
     pub fn broadcast(&self) -> Broadcast {
-        Broadcast { ids: self.wanted.into_iter() }
+        Broadcast {
+            ids: self.wanted.into_iter(),
+        }
     }
 
     /// One round, carrying only what has moved or is due to be repeated.
     pub fn broadcast_fresh<'a>(&self, fresh: &'a mut Fresh, since_ms: u16) -> BroadcastFresh<'a> {
-        BroadcastFresh { ids: self.wanted.into_iter(), fresh, since_ms, offered: None }
+        BroadcastFresh {
+            ids: self.wanted.into_iter(),
+            fresh,
+            since_ms,
+            offered: None,
+        }
     }
 }
 
@@ -195,7 +207,11 @@ pub struct Acks {
 
 impl Acks {
     fn empty() -> Self {
-        Acks { ids: [0; IDS_PER_FRAME], len: 0, at: 0 }
+        Acks {
+            ids: [0; IDS_PER_FRAME],
+            len: 0,
+            at: 0,
+        }
     }
 
     fn new(ids: &[u8]) -> Self {
@@ -306,7 +322,10 @@ pub struct Subscription<'a> {
 impl<'a> Subscription<'a> {
     /// `wanted` is the display's gauge list, fixed at build time.
     pub const fn new(wanted: &'a [u8]) -> Self {
-        Subscription { wanted, acked: IdSet::new() }
+        Subscription {
+            wanted,
+            acked: IdSet::new(),
+        }
     }
 
     /// Frames asking for everything not yet acknowledged, eight IDs each.
@@ -315,7 +334,11 @@ impl<'a> Subscription<'a> {
     /// The iterator holds its own snapshot, so acks may be fed while it is
     /// still being drained.
     pub fn request(&self) -> Requests<'a> {
-        Requests { wanted: self.wanted, acked: self.acked, at: 0 }
+        Requests {
+            wanted: self.wanted,
+            acked: self.acked,
+            at: 0,
+        }
     }
 
     /// Feed every frame off the bus. Returns true if this frame acknowledged
@@ -345,7 +368,10 @@ impl<'a> Subscription<'a> {
 
     /// How many gauges are still waiting to be acknowledged.
     pub fn pending(&self) -> usize {
-        self.wanted.iter().filter(|id| !self.acked.contains(**id)).count()
+        self.wanted
+            .iter()
+            .filter(|id| !self.acked.contains(**id))
+            .count()
     }
 
     pub fn wanted(&self) -> &'a [u8] {
@@ -417,7 +443,10 @@ impl Fresh {
     /// Nothing sent yet, so the first round sends everything.
     #[must_use]
     pub const fn new() -> Self {
-        Self { last: [0; 256], due: [0; 256] }
+        Self {
+            last: [0; 256],
+            due: [0; 256],
+        }
     }
 
     /// Whether `id` wants sending, given what it reads now.
@@ -458,8 +487,14 @@ mod fresh_tests {
     #[test]
     fn a_value_that_has_not_moved_is_not_sent_again() {
         let mut fresh = Fresh::new();
-        assert!(fresh.worth_sending(0x2D, 3000, 20), "the first one always goes");
-        assert!(!fresh.worth_sending(0x2D, 3000, 20), "and the same one does not");
+        assert!(
+            fresh.worth_sending(0x2D, 3000, 20),
+            "the first one always goes"
+        );
+        assert!(
+            !fresh.worth_sending(0x2D, 3000, 20),
+            "and the same one does not"
+        );
         assert!(fresh.worth_sending(0x2D, 3100, 20), "a change does");
     }
 

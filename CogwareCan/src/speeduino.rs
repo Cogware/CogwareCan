@@ -182,7 +182,10 @@ pub fn parse_n_with(layout: Layout, packet: &[u8]) -> Result<usize, SpeeduinoErr
     let declared = n_payload_len(packet)?;
     let body = &packet[N_HEADER_LEN..];
     if body.len() < declared {
-        return Err(SpeeduinoError::ShortPayload { declared, got: body.len() });
+        return Err(SpeeduinoError::ShortPayload {
+            declared,
+            got: body.len(),
+        });
     }
     Ok(apply_realtime_with(layout, &body[..declared]))
 }

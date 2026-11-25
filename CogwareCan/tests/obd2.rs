@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! OBD2 mode 01 request/response.
 
-use cogware_can::CanFrame;
 use cogware_can::obd2::*;
+use cogware_can::CanFrame;
 use cogware_can::*;
 use embedded_can::Frame;
 
@@ -68,14 +68,29 @@ fn common_pids_decode() {
 fn rejects_non_responses() {
     let _bus = bus();
     // wrong ID, wrong mode, unknown PID, negative response, too short
-    assert_eq!(feed_response(&protocol::frame(0x360, &[4, 0x41, 0x0C, 0x36, 0xB0]).unwrap()), None);
-    assert_eq!(feed_response(&protocol::frame(0x7E8, &[4, 0x42, 0x0C, 0x36, 0xB0]).unwrap()), None);
+    assert_eq!(
+        feed_response(&protocol::frame(0x360, &[4, 0x41, 0x0C, 0x36, 0xB0]).unwrap()),
+        None
+    );
+    assert_eq!(
+        feed_response(&protocol::frame(0x7E8, &[4, 0x42, 0x0C, 0x36, 0xB0]).unwrap()),
+        None
+    );
     assert_eq!(feed_response(&response(0x99, &[1, 2])), None);
-    assert_eq!(feed_response(&protocol::frame(0x7E8, &[3, 0x7F, 0x01, 0x12]).unwrap()), None);
-    assert_eq!(feed_response(&protocol::frame(0x7E8, &[1, 0x41]).unwrap()), None);
+    assert_eq!(
+        feed_response(&protocol::frame(0x7E8, &[3, 0x7F, 0x01, 0x12]).unwrap()),
+        None
+    );
+    assert_eq!(
+        feed_response(&protocol::frame(0x7E8, &[1, 0x41]).unwrap()),
+        None
+    );
     assert_eq!(RPM.get(), None);
     // Declared length shorter than the payload needed: field not written
-    assert_eq!(feed_response(&protocol::frame(0x7E8, &[3, 0x41, 0x0C, 0x36, 0xB0]).unwrap()), Some(0));
+    assert_eq!(
+        feed_response(&protocol::frame(0x7E8, &[3, 0x41, 0x0C, 0x36, 0xB0]).unwrap()),
+        Some(0)
+    );
 }
 
 #[test]
@@ -84,7 +99,13 @@ fn pids_are_unique_and_only_feed_common_gauges() {
     for p in PIDS {
         assert!(seen.insert(p.pid), "duplicate PID {:#x}", p.pid);
         for f in p.fields {
-            assert_eq!(f.gauge.source, Source::Common, "PID {:#x} feeds {}", p.pid, f.gauge.name);
+            assert_eq!(
+                f.gauge.source,
+                Source::Common,
+                "PID {:#x} feeds {}",
+                p.pid,
+                f.gauge.name
+            );
         }
     }
 }
@@ -94,7 +115,10 @@ fn odometer_decodes_from_pid_a6() {
     let _bus = bus();
     // PID A6 is 0.1 km/bit, which is exactly what an ODOMETER count is, so
     // the raw big-endian u32 lands in the gauge untouched.
-    assert_eq!(feed_response(&response(0xA6, &[0x00, 0x12, 0xD6, 0x87])), Some(1));
+    assert_eq!(
+        feed_response(&response(0xA6, &[0x00, 0x12, 0xD6, 0x87])),
+        Some(1)
+    );
     assert_eq!(ODOMETER.get(), Some(1_234_567));
     assert_eq!(ODOMETER.as_f32(), Some(123_456.7));
     assert!(close(ODOMETER.to(Unit::MILES), 76_712.4));

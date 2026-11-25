@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! CAN framing and spec-table consistency.
 
+use cogware_can::CanFrame;
 use cogware_can::*;
 use embedded_can::{Frame, Id, StandardId};
-use cogware_can::CanFrame;
 
 // Gauges are global statics; keep tests in this binary from interleaving.
 mod common;
@@ -69,17 +69,27 @@ fn oversized_frame_is_rejected_not_panicked() {
     let f = std_frame(RPM.id, &[1, 2, 3, 4, 5, 6, 7, 8]);
     assert_eq!(
         feed_frame(&f),
-        Err(FeedError::BadLength { id: RPM.id, expected: 2, got: 8 })
+        Err(FeedError::BadLength {
+            id: RPM.id,
+            expected: 2,
+            got: 8
+        })
     );
     assert_eq!(RPM.get(), Some(1000), "bad frame must not touch the value");
 }
 
 #[test]
 fn non_gauge_frames_are_rejected() {
-    assert_eq!(feed_frame(&std_frame(0x7DF, &[0])), Err(FeedError::UnknownId(0x7DF)));
+    assert_eq!(
+        feed_frame(&std_frame(0x7DF, &[0])),
+        Err(FeedError::UnknownId(0x7DF))
+    );
     let ack = protocol::ack_frame(0x2D).unwrap();
     assert!(protocol::is_ack(&ack));
-    assert_eq!(feed_frame(&ack), Err(FeedError::UnknownId(protocol::MASTER_ACK_ID)));
+    assert_eq!(
+        feed_frame(&ack),
+        Err(FeedError::UnknownId(protocol::MASTER_ACK_ID))
+    );
     let req = protocol::request_frame(&[0x20, 0x2D]).unwrap();
     assert!(protocol::is_request(&req));
     assert_eq!(&req.data()[..req.dlc()], &[0x20, 0x2D]);
@@ -95,13 +105,23 @@ fn id_map_is_partitioned() {
     assert!(!protocol::is_gauge_range(protocol::RESERVED_ID_MAX));
     assert!(protocol::is_gauge_range(protocol::GAUGE_ID_MIN));
     assert!(!protocol::is_gauge_range(obd2::REQUEST_ID));
-    let ctrl = [protocol::MASTER_ACK_ID, protocol::CLIENT_REQUEST_ID, xfer::CMD_ID, xfer::DATA_ID, xfer::REPLY_ID];
+    let ctrl = [
+        protocol::MASTER_ACK_ID,
+        protocol::CLIENT_REQUEST_ID,
+        xfer::CMD_ID,
+        xfer::DATA_ID,
+        xfer::REPLY_ID,
+    ];
     let mut sorted = ctrl.to_vec();
     sorted.sort();
     sorted.dedup();
     assert_eq!(sorted.len(), ctrl.len(), "control IDs collide");
     for g in ALL_GAUGES {
-        assert!(!protocol::is_reserved(g.id), "{} sits in the reserved range", g.name);
+        assert!(
+            !protocol::is_reserved(g.id),
+            "{} sits in the reserved range",
+            g.name
+        );
     }
 }
 
@@ -128,9 +148,18 @@ fn as_f32_applies_unit_scale() {
 fn table_enum_and_statics_agree() {
     let mut seen = std::collections::HashSet::new();
     for g in ALL_GAUGES {
-        assert!(seen.insert(g.id), "duplicate CAN ID 0x{:X} ({})", g.id, g.name);
+        assert!(
+            seen.insert(g.id),
+            "duplicate CAN ID 0x{:X} ({})",
+            g.id,
+            g.name
+        );
         let e = Gauge::from_id(g.id).unwrap_or_else(|| panic!("{} missing from enum", g.name));
-        assert!(std::ptr::eq(e.data(), *g), "{} enum points at a different static", g.name);
+        assert!(
+            std::ptr::eq(e.data(), *g),
+            "{} enum points at a different static",
+            g.name
+        );
         assert_eq!(e.id(), g.id);
         assert_eq!(gauge_by_id(g.id).unwrap().name, g.name);
         assert!(

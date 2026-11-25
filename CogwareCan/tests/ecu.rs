@@ -3,9 +3,9 @@
 //! declares; the declared layouts were checked against vendor documents and
 //! firmware source (see each module header).
 
+use cogware_can::CanFrame;
 use cogware_can::*;
 use embedded_can::{Frame, Id, StandardId};
-use cogware_can::CanFrame;
 
 mod common;
 use common::bus;
@@ -26,7 +26,10 @@ fn le(words: &[i16]) -> Vec<u8> {
 fn haltech_frames() {
     let _bus = bus();
     // 0x360: rpm 3500, MAP 45.0 kPa, TPS 50.0 %, coolant pressure 221.3 kPa abs = 120.0 gauge
-    assert_eq!(haltech::SOURCE.feed_default(&frame(0x360, &be(&[3500, 450, 500, 2213]))), Some(4));
+    assert_eq!(
+        haltech::SOURCE.feed_default(&frame(0x360, &be(&[3500, 450, 500, 2213]))),
+        Some(4)
+    );
     assert_eq!(RPM.get(), Some(3500));
     assert_eq!(MAP.as_f32(), Some(45.0));
     assert_eq!(TPS.as_f32(), Some(50.0));
@@ -62,7 +65,14 @@ fn haltech_frames() {
     assert_eq!(PEDAL.as_f32(), Some(75.5));
     haltech::SOURCE.feed_default(&frame(0x3E2, &be(&[425, 0, 0, 0])));
     assert_eq!(FUEL_VOLUME.as_f32(), Some(42.5));
-    assert_eq!(FUEL_VOLUME.reading().unwrap().gallons().map(|g| (g * 100.0).round() / 100.0), Some(11.23));
+    assert_eq!(
+        FUEL_VOLUME
+            .reading()
+            .unwrap()
+            .gallons()
+            .map(|g| (g * 100.0).round() / 100.0),
+        Some(11.23)
+    );
     assert_eq!(FUEL_LEVEL.get(), None);
     assert_eq!(haltech::SOURCE.feed_default(&frame(0x200, &[0; 8])), None);
 }
@@ -71,7 +81,10 @@ fn haltech_frames() {
 fn megasquirt_frames() {
     let _bus = bus();
     // 1512: MAP 45.0 kPa, rpm 3500, CLT 188.6 °F (=87.0 °C), TPS 50.0 %
-    assert_eq!(megasquirt::SOURCE.feed_default(&frame(1512, &be(&[450, 3500, 1886, 500]))), Some(4));
+    assert_eq!(
+        megasquirt::SOURCE.feed_default(&frame(1512, &be(&[450, 3500, 1886, 500]))),
+        Some(4)
+    );
     assert_eq!(MAP.as_f32(), Some(45.0));
     assert_eq!(RPM.get(), Some(3500));
     assert_eq!(CLNT.get(), Some(870));
@@ -87,16 +100,26 @@ fn megasquirt_frames() {
     megasquirt::SOURCE.feed_default(&frame(1514, &d));
     assert_eq!(AFR_TARGET.as_f32(), Some(14.7));
     assert_eq!(AFR_PRI.as_f32(), Some(12.5));
-    assert_eq!(EGO_CORRECT.as_f32(), Some(2.3), "100-centred MS value becomes 0-centred trim");
+    assert_eq!(
+        EGO_CORRECT.as_f32(),
+        Some(2.3),
+        "100-centred MS value becomes 0-centred trim"
+    );
     assert_eq!(EGT1.get(), Some(8000));
     // 1516: VSS1 25.0 m/s = 90.0 km/h
     megasquirt::SOURCE.feed_default(&frame(1516, &be(&[250, 0, 0, 0])));
     assert_eq!(VSS.as_f32(), Some(90.0));
     // A relocated base still decodes
     clear_all();
-    assert_eq!(megasquirt::SOURCE.feed(0x600, &frame(0x601, &be(&[2750, 0, 770, -30]))), Some(4));
+    assert_eq!(
+        megasquirt::SOURCE.feed(0x600, &frame(0x601, &be(&[2750, 0, 770, -30]))),
+        Some(4)
+    );
     assert_eq!(PULSE_WIDTH1.get(), Some(2750));
-    assert_eq!(megasquirt::SOURCE.feed_default(&frame(0x601, &[0; 8])), None);
+    assert_eq!(
+        megasquirt::SOURCE.feed_default(&frame(0x601, &[0; 8])),
+        None
+    );
 }
 
 #[test]
@@ -157,7 +180,10 @@ fn rusefi_frames() {
     assert_eq!(EGT1.as_f32(), Some(800.0));
     // Short frame: only the fields present are written
     clear_all();
-    assert_eq!(rusefi::SOURCE.feed_default(&frame(0x201, &3500u16.to_le_bytes())), Some(1));
+    assert_eq!(
+        rusefi::SOURCE.feed_default(&frame(0x201, &3500u16.to_le_bytes())),
+        Some(1)
+    );
     assert_eq!(CUR_SPARK_ADVANCE.get(), None);
 }
 
@@ -165,7 +191,10 @@ fn rusefi_frames() {
 fn maxxecu_frames() {
     let _bus = bus();
     // 0x520: rpm, TPS 50.0 %, MAP 45.0 kPa; 0x521 lambda A/B, timing 12.5°
-    assert_eq!(maxxecu::SOURCE.feed_default(&frame(0x520, &le(&[3500, 500, 450, 1000]))), Some(3));
+    assert_eq!(
+        maxxecu::SOURCE.feed_default(&frame(0x520, &le(&[3500, 500, 450, 1000]))),
+        Some(3)
+    );
     assert_eq!(RPM.get(), Some(3500));
     assert_eq!(TPS.as_f32(), Some(50.0));
     assert_eq!(MAP.as_f32(), Some(45.0));
@@ -213,7 +242,7 @@ fn ecumaster_frames() {
     assert_eq!(IAT.as_f32(), Some(25.0));
     assert_eq!(MAP.as_f32(), Some(45.0));
     assert_eq!(PULSE_WIDTH1.get(), Some(2758)); // 171/62 ms
-    // 0x602: vss 88, baro 101, oil temp 97, oil 2.5 bar (*16 = 40), fuel 3 bar (48), CLT -10
+                                                // 0x602: vss 88, baro 101, oil temp 97, oil 2.5 bar (*16 = 40), fuel 3 bar (48), CLT -10
     let mut d = le(&[88]);
     d.extend([101, 97, 40, 48]);
     d.extend(le(&[-10]));
@@ -248,14 +277,21 @@ fn ecumaster_frames() {
     assert_eq!(BOOST_TARGET.as_f32(), Some(200.0));
     assert_eq!(AFR_TARGET.as_f32(), Some(12.5));
     // Relocated base
-    assert_eq!(ecumaster::SOURCE.feed(0x700, &frame(0x700, &le(&[900, 0, 0, 0]))), Some(5));
+    assert_eq!(
+        ecumaster::SOURCE.feed(0x700, &frame(0x700, &le(&[900, 0, 0, 0]))),
+        Some(5)
+    );
     assert_eq!(RPM.get(), Some(900));
 }
 
 #[test]
 fn registry_dispatches_by_id() {
     let _bus = bus();
-    let hit = |f: &CanFrame| CAN_SOURCES.iter().find_map(|s| s.feed_default(f).map(|_| s.name));
+    let hit = |f: &CanFrame| {
+        CAN_SOURCES
+            .iter()
+            .find_map(|s| s.feed_default(f).map(|_| s.name))
+    };
     assert_eq!(hit(&frame(0x360, &be(&[900, 0, 0, 0]))), Some("Haltech"));
     assert_eq!(hit(&frame(1512, &be(&[0, 900, 0, 0]))), Some("Megasquirt"));
     assert_eq!(hit(&frame(0x201, &900u16.to_le_bytes())), Some("rusEFI"));
@@ -264,7 +300,10 @@ fn registry_dispatches_by_id() {
     assert_eq!(hit(&frame(0x7DF, &[0])), None);
     assert_eq!(RPM.get(), Some(900));
     // Every source's IDs are distinct from each other at default bases.
-    let mut all: Vec<u16> = CAN_SOURCES.iter().flat_map(|s| s.ids(s.default_base)).collect();
+    let mut all: Vec<u16> = CAN_SOURCES
+        .iter()
+        .flat_map(|s| s.ids(s.default_base))
+        .collect();
     let n = all.len();
     all.sort();
     all.dedup();
@@ -293,7 +332,11 @@ fn every_common_gauge_has_a_can_source() {
     // A gauge classed Common must be reachable from at least one converter here.
     let fed: std::collections::HashSet<&str> = CAN_SOURCES
         .iter()
-        .flat_map(|s| s.frames.iter().flat_map(|m| m.fields.iter().map(|f| f.gauge.name)))
+        .flat_map(|s| {
+            s.frames
+                .iter()
+                .flat_map(|m| m.fields.iter().map(|f| f.gauge.name))
+        })
         .collect();
     let orphans: Vec<&str> = ALL_GAUGES
         .iter()
@@ -313,12 +356,20 @@ fn gps_gauges_need_a_receiver_not_an_ecu() {
     // any ECU is enough to get them, which it is not.
     for g in [&GPS_LOCK, &GPS_SATS, &GPS_SPEED] {
         assert_eq!(g.source, Source::Gps, "{}", g.name);
-        assert!(g.source > Source::Standalone, "{} must fail a <= Standalone check", g.name);
+        assert!(
+            g.source > Source::Standalone,
+            "{} must fail a <= Standalone check",
+            g.name
+        );
     }
     // No converter in this crate feeds them, so none may claim to.
     let fed: std::collections::HashSet<&str> = CAN_SOURCES
         .iter()
-        .flat_map(|s| s.frames.iter().flat_map(|m| m.fields.iter().map(|f| f.gauge.name)))
+        .flat_map(|s| {
+            s.frames
+                .iter()
+                .flat_map(|m| m.fields.iter().map(|f| f.gauge.name))
+        })
         .collect();
     for name in ["GPS_LOCK", "GPS_SATS", "GPS_SPEED"] {
         assert!(!fed.contains(name), "{name} has no CAN-broadcast source");
@@ -345,7 +396,11 @@ fn no_gps_lock_is_the_only_value_meaning_do_not_trust_the_rest() {
     assert_eq!(f.dlc(), 1);
     GPS_SATS.clear();
     feed_frame(&f).unwrap();
-    assert_eq!(GPS_SATS.get(), Some(255), "clamped, never wrapped to nothing");
+    assert_eq!(
+        GPS_SATS.get(),
+        Some(255),
+        "clamped, never wrapped to nothing"
+    );
 }
 
 /// The channels added after the first pass, kept in one place so the scaling
@@ -368,7 +423,11 @@ fn rusefi_channels_added_later() {
     // 0x202: pedal, TPS1, TPS2, wastegate, each percent*100.
     rusefi::SOURCE.feed_default(&frame(0x202, &le(&[1000, 2500, 2450, 0])));
     assert_eq!(TPS.as_f32(), Some(25.0));
-    assert_eq!(TPS2.as_f32(), Some(24.5), "the second blade disagreeing is the fault");
+    assert_eq!(
+        TPS2.as_f32(),
+        Some(24.5),
+        "the second blade disagreeing is the fault"
+    );
 
     // 0x203 bytes 4-6: the two spare temperature inputs and the ECU's own
     // board, all +40 in a byte like coolant and intake.
@@ -382,7 +441,11 @@ fn rusefi_channels_added_later() {
     // 0x205: air mass per cylinder (grams*1000, so milligrams already),
     // airflow (kg/h*100) and the knock counter.
     rusefi::SOURCE.feed_default(&frame(0x205, &le(&[450, 3500, 0, 7])));
-    assert_eq!(CYL_AIRMASS.get(), Some(450), "450 mg of air in one cylinder");
+    assert_eq!(
+        CYL_AIRMASS.get(),
+        Some(450),
+        "450 mg of air in one cylinder"
+    );
     assert_eq!(AIRFLOW.as_f32(), Some(35.0));
     assert_eq!(KNOCK_COUNT.get(), Some(7));
 
@@ -391,9 +454,17 @@ fn rusefi_channels_added_later() {
     rusefi::SOURCE.feed_default(&frame(0x206, &le(&[1500, 400, 250, -300])));
     assert_eq!(FUEL_USED.to(Unit::GRAMS), Some(1500.0));
     assert_eq!(FUEL_FLOW.as_f32(), Some(7.2));
-    assert_eq!(FUEL_FLOW.to(Unit::G_PER_S), Some(2.0), "the same flow, stated the other way");
+    assert_eq!(
+        FUEL_FLOW.to(Unit::G_PER_S),
+        Some(2.0),
+        "the same flow, stated the other way"
+    );
     assert_eq!(EGO_CORRECT.as_f32(), Some(2.5));
-    assert_eq!(EGO_CORRECT2.as_f32(), Some(-3.0), "banks drifting apart is the fault");
+    assert_eq!(
+        EGO_CORRECT2.as_f32(),
+        Some(-3.0),
+        "banks drifting apart is the fault"
+    );
 
     // 0x207 byte 6: direct injection rail, bar*10 -> 150 bar is 15000 kPa.
     rusefi::SOURCE.feed_default(&frame(0x207, &le(&[0, 0, 0, 1500])));
@@ -435,7 +506,11 @@ fn maxxecu_channels_added_later() {
     // 0x528: knock, in the detail a lamp cannot carry.
     maxxecu::SOURCE.feed_default(&frame(0x528, &le(&[1450, -32, 12, 3])));
     assert_eq!(KNOCK_LEVEL.get(), Some(1450));
-    assert_eq!(KNOCK_RETARD.as_f32(), Some(-3.2), "timing pulled back 3.2 degrees");
+    assert_eq!(
+        KNOCK_RETARD.as_f32(),
+        Some(-3.2),
+        "timing pulled back 3.2 degrees"
+    );
     assert_eq!(KNOCK_COUNT.get(), Some(12));
     assert_eq!(KNOCK_CYL.get(), Some(3));
 
@@ -444,7 +519,11 @@ fn maxxecu_channels_added_later() {
     maxxecu::SOURCE.feed_default(&frame(0x533, &le(&[695, 880, 700, 0])));
     assert_eq!(EGT2.as_f32(), Some(700.0));
     assert_eq!(EGT5.as_f32(), Some(690.0));
-    assert_eq!(EGT7.as_f32(), Some(880.0), "the seventh probe is running hot");
+    assert_eq!(
+        EGT7.as_f32(),
+        Some(880.0),
+        "the seventh probe is running hot"
+    );
     assert_eq!(EGT8.as_f32(), Some(700.0));
 
     // 0x534: the ECU's own temperature and the sync-loss counter.

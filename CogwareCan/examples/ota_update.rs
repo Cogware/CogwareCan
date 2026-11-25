@@ -3,9 +3,9 @@
 //!
 //!     cargo run --example ota_update
 
-use cogware_can::CanFrame;
 use cogware_can::protocol::NODE_BROADCAST;
 use cogware_can::xfer::*;
+use cogware_can::CanFrame;
 use cogware_can::{crc, protocol};
 
 /// The image to push. In firmware this comes off an SD card or USB.
@@ -15,8 +15,15 @@ fn firmware_image(n: usize) -> Vec<u8> {
 
 fn main() {
     let image = firmware_image(240);
-    println!("image: {} bytes, crc32 {:#010x}", image.len(), crc::crc32(&image));
-    println!("transfer IDs: cmd {:#05x}, data {:#05x}, reply {:#05x}\n", CMD_ID, DATA_ID, REPLY_ID);
+    println!(
+        "image: {} bytes, crc32 {:#010x}",
+        image.len(),
+        crc::crc32(&image)
+    );
+    println!(
+        "transfer IDs: cmd {:#05x}, data {:#05x}, reply {:#05x}\n",
+        CMD_ID, DATA_ID, REPLY_ID
+    );
 
     // Two displays on the bus, addresses 7 and 9. Each stages the image in a
     // buffer; real firmware would write to a spare flash bank instead.
@@ -101,7 +108,10 @@ fn main() {
     println!("\ntargeting node 7 only");
     let mut b7 = [0u8; 256];
     let mut b9 = [0u8; 256];
-    let mut only = [Receiver::new(7, BufferSink::new(&mut b7)), Receiver::new(9, BufferSink::new(&mut b9))];
+    let mut only = [
+        Receiver::new(7, BufferSink::new(&mut b7)),
+        Receiver::new(9, BufferSink::new(&mut b9)),
+    ];
     let mut m = Sender::new(7, &image[..], 1, 16, 1);
     while !matches!(m.state(), TxState::Done | TxState::Failed(_)) {
         if let Some(f) = m.next_frame() {
@@ -114,7 +124,10 @@ fn main() {
     }
     println!("  node 7 committed: {}", only[0].sink().committed);
     let idle_node = only[1].sink();
-    println!("  node 9 committed: {}  ({} bytes seen)", idle_node.committed, idle_node.len);
+    println!(
+        "  node 9 committed: {}  ({} bytes seen)",
+        idle_node.committed, idle_node.len
+    );
 
     // A corrupted image never reaches commit.
     println!("\ncorrupted image");
@@ -130,7 +143,11 @@ fn main() {
         }
     }
     println!("  master: {:?}", m.state());
-    println!("  node:   {:?}, committed {}", node.state(), node.sink().committed);
+    println!(
+        "  node:   {:?}, committed {}",
+        node.state(),
+        node.sink().committed
+    );
 }
 
 /// Corrupt one byte of the third data block, as line noise would.

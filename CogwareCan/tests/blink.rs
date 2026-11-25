@@ -35,7 +35,10 @@ fn a_turn_signal_goes_on_and_off_a_second_at_a_time() {
     // A tick before the half period is up changes nothing.
     now += HALF - 1;
     blink.tick(now);
-    assert!(indicators::get(Indicator::TurnLeft), "still lit just before");
+    assert!(
+        indicators::get(Indicator::TurnLeft),
+        "still lit just before"
+    );
 
     now += 1;
     blink.tick(now);

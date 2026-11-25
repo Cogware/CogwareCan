@@ -37,7 +37,7 @@ static ENGINE: &[Field] = &[
 ];
 
 static SENSORS: &[Field] = &[
-    field!(0, U16, BAT_VOL, raw),          // already millivolts
+    field!(0, U16, BAT_VOL, raw), // already millivolts
     field!(2, U16, AFR_PRI, lambda_thousandths),
     field!(4, U8, OIL_PRES, psi),
 ];
@@ -53,20 +53,25 @@ static SENSORS: &[Field] = &[
 //          bit 3  "service due" timer  -> --, a calendar, not a fault
 //          bit 4  main relay energised -> --, the ECU being powered is not
 //                                          news to a dash it is feeding
-static STATUS: &[Flag] = &[
-    flag!(0, 0, RevLimit),
-    flag!(0, 1, Knock),
-    flag!(0, 2, Fan),
-];
+static STATUS: &[Flag] = &[flag!(0, 0, RevLimit), flag!(0, 1, Knock), flag!(0, 2, Fan)];
 
 static ACME: CanSource = CanSource {
     name: "Acme EFI",
     default_base: 0x640,
     frames: &[
-        CanFrameMap { id_offset: 0, fields: ENGINE },
-        CanFrameMap { id_offset: 1, fields: SENSORS },
+        CanFrameMap {
+            id_offset: 0,
+            fields: ENGINE,
+        },
+        CanFrameMap {
+            id_offset: 1,
+            fields: SENSORS,
+        },
     ],
-    lamps: &[LampFrame { id_offset: 2, flags: STATUS }],
+    lamps: &[LampFrame {
+        id_offset: 2,
+        flags: STATUS,
+    }],
 };
 
 fn main() {
@@ -79,8 +84,14 @@ fn main() {
     sensors.extend(898u16.to_le_bytes()); // lambda 0.898
     sensors.extend([43]); // 43 psi
 
-    println!("wrote {:?} gauges", ACME.feed_default(&protocol::frame(0x640, &engine).unwrap()));
-    println!("wrote {:?} gauges", ACME.feed_default(&protocol::frame(0x641, &sensors).unwrap()));
+    println!(
+        "wrote {:?} gauges",
+        ACME.feed_default(&protocol::frame(0x640, &engine).unwrap())
+    );
+    println!(
+        "wrote {:?} gauges",
+        ACME.feed_default(&protocol::frame(0x641, &sensors).unwrap())
+    );
 
     println!("\n  rpm       {:>7.0}", RPM.as_f32().unwrap());
     println!("  MAP       {:>7.1} kPa", MAP.as_f32().unwrap());
@@ -88,17 +99,30 @@ fn main() {
     println!("  throttle  {:>7.1} %", TPS.as_f32().unwrap());
     println!("  battery   {:>7.2} V", BAT_VOL.as_f32().unwrap());
     println!("  AFR       {:>7.2}", AFR_PRI.as_f32().unwrap());
-    println!("  oil press {:>7.1} kPa ({:.0} psi back)", OIL_PRES.as_f32().unwrap(), OIL_PRES.to(Unit::PSI).unwrap());
+    println!(
+        "  oil press {:>7.1} kPa ({:.0} psi back)",
+        OIL_PRES.as_f32().unwrap(),
+        OIL_PRES.to(Unit::PSI).unwrap()
+    );
 
     // Status bits land as lamps, which a display reads exactly as it reads
     // one the server set: a lamp is a lamp whatever lit it.
     ACME.feed_default(&protocol::frame(0x642, &[0b0000_0110]).unwrap());
-    println!("\n  lamps lit: {:?}", indicators::displayed().iter().map(|i| i.name()).collect::<Vec<_>>());
+    println!(
+        "\n  lamps lit: {:?}",
+        indicators::displayed()
+            .iter()
+            .map(|i| i.name())
+            .collect::<Vec<_>>()
+    );
     println!("  knocking:  {}", indicators::get(Indicator::Knock));
     // And go out again when the bit does, because the ECU is the authority
     // on its own state.
     ACME.feed_default(&protocol::frame(0x642, &[0]).unwrap());
-    println!("  knocking:  {} (after the bit cleared)", indicators::get(Indicator::Knock));
+    println!(
+        "  knocking:  {} (after the bit cleared)",
+        indicators::get(Indicator::Knock)
+    );
 
     // The base ID is configurable on most ECUs; `feed` takes the one in use.
     clear_all();
@@ -106,5 +130,8 @@ fn main() {
     println!("\nrelocated to base 0x500: rpm {:?}", RPM.get());
 
     // Frames belonging to another protocol are left alone.
-    println!("a frame at 0x360:        {:?}", ACME.feed_default(&protocol::frame(0x360, &[0; 8]).unwrap()));
+    println!(
+        "a frame at 0x360:        {:?}",
+        ACME.feed_default(&protocol::frame(0x360, &[0; 8]).unwrap())
+    );
 }

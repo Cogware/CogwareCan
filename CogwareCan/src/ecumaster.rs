@@ -75,11 +75,26 @@ pub static SOURCE: CanSource = CanSource {
     name: "ECUMaster",
     default_base: DEFAULT_BASE,
     frames: &[
-        CanFrameMap { id_offset: 0, fields: F0 },
-        CanFrameMap { id_offset: 2, fields: F2 },
-        CanFrameMap { id_offset: 3, fields: F3 },
-        CanFrameMap { id_offset: 4, fields: F4 },
-        CanFrameMap { id_offset: 7, fields: F7 },
+        CanFrameMap {
+            id_offset: 0,
+            fields: F0,
+        },
+        CanFrameMap {
+            id_offset: 2,
+            fields: F2,
+        },
+        CanFrameMap {
+            id_offset: 3,
+            fields: F3,
+        },
+        CanFrameMap {
+            id_offset: 4,
+            fields: F4,
+        },
+        CanFrameMap {
+            id_offset: 7,
+            fields: F7,
+        },
     ],
     // No status bits mapped: this protocol's flag words are not documented
     // per-bit in the material this converter was written from, and a lamp lit

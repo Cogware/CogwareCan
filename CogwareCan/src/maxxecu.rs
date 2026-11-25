@@ -178,24 +178,81 @@ pub static SOURCE: CanSource = CanSource {
     name: "MaxxECU",
     default_base: DEFAULT_BASE,
     frames: &[
-        CanFrameMap { id_offset: 0x520, fields: F520 },
-        CanFrameMap { id_offset: 0x521, fields: F521 },
-        CanFrameMap { id_offset: 0x522, fields: F522 },
-        CanFrameMap { id_offset: 0x523, fields: F523 },
-        CanFrameMap { id_offset: 0x524, fields: F524 },
-        CanFrameMap { id_offset: 0x526, fields: F526 },
-        CanFrameMap { id_offset: 0x527, fields: F527 },
-        CanFrameMap { id_offset: 0x528, fields: F528 },
-        CanFrameMap { id_offset: 0x530, fields: F530 },
-        CanFrameMap { id_offset: 0x531, fields: F531 },
-        CanFrameMap { id_offset: 0x532, fields: F532 },
-        CanFrameMap { id_offset: 0x533, fields: F533 },
-        CanFrameMap { id_offset: 0x534, fields: F534 },
-        CanFrameMap { id_offset: 0x536, fields: F536 },
-        CanFrameMap { id_offset: 0x537, fields: F537 },
-        CanFrameMap { id_offset: 0x540, fields: F540 },
-        CanFrameMap { id_offset: 0x541, fields: F541 },
-        CanFrameMap { id_offset: 0x542, fields: F542 },
+        CanFrameMap {
+            id_offset: 0x520,
+            fields: F520,
+        },
+        CanFrameMap {
+            id_offset: 0x521,
+            fields: F521,
+        },
+        CanFrameMap {
+            id_offset: 0x522,
+            fields: F522,
+        },
+        CanFrameMap {
+            id_offset: 0x523,
+            fields: F523,
+        },
+        CanFrameMap {
+            id_offset: 0x524,
+            fields: F524,
+        },
+        CanFrameMap {
+            id_offset: 0x526,
+            fields: F526,
+        },
+        CanFrameMap {
+            id_offset: 0x527,
+            fields: F527,
+        },
+        CanFrameMap {
+            id_offset: 0x528,
+            fields: F528,
+        },
+        CanFrameMap {
+            id_offset: 0x530,
+            fields: F530,
+        },
+        CanFrameMap {
+            id_offset: 0x531,
+            fields: F531,
+        },
+        CanFrameMap {
+            id_offset: 0x532,
+            fields: F532,
+        },
+        CanFrameMap {
+            id_offset: 0x533,
+            fields: F533,
+        },
+        CanFrameMap {
+            id_offset: 0x534,
+            fields: F534,
+        },
+        CanFrameMap {
+            id_offset: 0x536,
+            fields: F536,
+        },
+        CanFrameMap {
+            id_offset: 0x537,
+            fields: F537,
+        },
+        CanFrameMap {
+            id_offset: 0x540,
+            fields: F540,
+        },
+        CanFrameMap {
+            id_offset: 0x541,
+            fields: F541,
+        },
+        CanFrameMap {
+            id_offset: 0x542,
+            fields: F542,
+        },
     ],
-    lamps: &[LampFrame { id_offset: 0x526, flags: F526_LAMPS }],
+    lamps: &[LampFrame {
+        id_offset: 0x526,
+        flags: F526_LAMPS,
+    }],
 };

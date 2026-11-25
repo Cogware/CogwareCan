@@ -72,12 +72,17 @@ pub fn ingest(frame: &CanFrame) -> Fed {
     if obd2::is_response(frame) {
         // A reply to a PID nothing polls is not a fault; the car answers what
         // it likes and we decode the ones we know.
-        return Fed::Obd2 { gauges: obd2::feed_response(frame).unwrap_or(0) };
+        return Fed::Obd2 {
+            gauges: obd2::feed_response(frame).unwrap_or(0),
+        };
     }
 
     for source in CAN_SOURCES {
         if let Some(gauges) = source.feed_default(frame) {
-            return Fed::Ecu { source: source.name, gauges };
+            return Fed::Ecu {
+                source: source.name,
+                gauges,
+            };
         }
     }
 
@@ -98,7 +103,10 @@ mod tests {
         // CLNT is two bytes wide; one byte is a broken sender, and saying
         // "ignored" would hide it.
         let f = frame(Gauge::Clnt.id(), &[0x01]).expect("frame");
-        assert!(matches!(ingest(&f), Fed::Rejected(FeedError::BadLength { .. })));
+        assert!(matches!(
+            ingest(&f),
+            Fed::Rejected(FeedError::BadLength { .. })
+        ));
     }
 
     #[test]

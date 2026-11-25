@@ -40,8 +40,16 @@ fn main() {
     println!("parsed, {written} gauges written\n");
 
     println!("  rpm      {:>7.0}", RPM.as_f32().unwrap());
-    println!("  MAP      {:>7.1} kPa   ({:+.1} psi gauge)", MAP.as_f32().unwrap(), MAP.to(Unit::PSI).unwrap() - 14.7);
-    println!("  coolant  {:>7.1} °C    ({:.0} °F)", CLNT.as_f32().unwrap(), CLNT.to(Unit::FAHRENHEIT).unwrap());
+    println!(
+        "  MAP      {:>7.1} kPa   ({:+.1} psi gauge)",
+        MAP.as_f32().unwrap(),
+        MAP.to(Unit::PSI).unwrap() - 14.7
+    );
+    println!(
+        "  coolant  {:>7.1} °C    ({:.0} °F)",
+        CLNT.as_f32().unwrap(),
+        CLNT.to(Unit::FAHRENHEIT).unwrap()
+    );
     println!("  intake   {:>7.1} °C", IAT.as_f32().unwrap());
     println!("  AFR      {:>7.2}", AFR_PRI.as_f32().unwrap());
     println!("  battery  {:>7.2} V", BAT_VOL.as_f32().unwrap());
@@ -55,11 +63,20 @@ fn main() {
     let short = &packet[..speeduino::N_HEADER_LEN + 30];
     let mut header = short.to_vec();
     header[2] = 30;
-    println!("\n30-byte payload: {} gauges", speeduino::parse_n(&header).unwrap());
+    println!(
+        "\n30-byte payload: {} gauges",
+        speeduino::parse_n(&header).unwrap()
+    );
     println!("  rpm     {:?}", RPM.get());
-    println!("  speed   {:?}  (past the end of a short packet)", VSS.get());
+    println!(
+        "  speed   {:?}  (past the end of a short packet)",
+        VSS.get()
+    );
 
     // Malformed input is an error, never a panic.
     println!("\nbad packets: {:?}", speeduino::parse_n(b"xx"));
-    println!("             {:?}", speeduino::parse_n(&[b'n', 0x32, 200, 0, 0]));
+    println!(
+        "             {:?}",
+        speeduino::parse_n(&[b'n', 0x32, 200, 0, 0])
+    );
 }

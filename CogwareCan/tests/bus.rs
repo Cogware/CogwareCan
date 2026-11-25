@@ -40,7 +40,10 @@ fn a_node_asks_for_a_mode_and_the_master_announces_it() {
 
     let request = display.request_mode(MODE_SPORT).unwrap();
     let msg = master.feed(&request).unwrap();
-    assert_eq!((msg.node, msg.opcode, msg.mode()), (3, Opcode::ModeRequest, Some(MODE_SPORT)));
+    assert_eq!(
+        (msg.node, msg.opcode, msg.mode()),
+        (3, Opcode::ModeRequest, Some(MODE_SPORT))
+    );
     assert_eq!(master.mode(), MODE_SPORT);
 
     let state = master.announce().expect("the change is worth announcing");
@@ -76,7 +79,10 @@ fn an_update_flips_the_flag_for_every_node_not_being_written() {
     let state = master.announce().unwrap();
     for view in [&mut target, &mut bystander] {
         view.feed(&state);
-        assert!(view.update_in_progress(), "every node knows why the bus is busy");
+        assert!(
+            view.update_in_progress(),
+            "every node knows why the bus is busy"
+        );
     }
     assert!(target.update_is_mine());
     assert!(!bystander.update_is_mine(), "it is not this node's image");
@@ -102,7 +108,10 @@ fn a_broadcast_update_is_every_nodes_business() {
 fn the_mode_is_locked_while_an_update_runs() {
     let mut master = Bus::new();
     master.update_started(1);
-    assert!(!master.set_mode(MODE_SPORT), "a scene must not swap mid-transfer");
+    assert!(
+        !master.set_mode(MODE_SPORT),
+        "a scene must not swap mid-transfer"
+    );
     assert_eq!(master.mode(), MODE_NORMAL);
 
     // A node asking anyway is refused, but still told the mode it is in.
@@ -159,7 +168,14 @@ fn a_sender_percentage_feeds_the_announced_progress() {
     assert_eq!(tx.state(), xfer::TxState::Done);
     assert_eq!(tx.percent(), 100);
     assert_eq!(bus.state().progress, 100);
-    assert_eq!(tx.image(), xfer::Image { size: 60, kind: xfer::kind::SCENE, slot: 0 });
+    assert_eq!(
+        tx.image(),
+        xfer::Image {
+            size: 60,
+            kind: xfer::kind::SCENE,
+            slot: 0
+        }
+    );
 }
 
 #[test]
@@ -171,7 +187,9 @@ fn errors_and_offers_reach_the_master_intact() {
     assert_eq!((msg.node, msg.error()), (6, Some(0x42)));
     assert!(master.announce().is_none(), "an error changes no state");
 
-    let offer = BusView::new(9).offer_update(xfer::kind::SCENE, 4096).unwrap();
+    let offer = BusView::new(9)
+        .offer_update(xfer::kind::SCENE, 4096)
+        .unwrap();
     let msg = master.feed(&offer).unwrap();
     assert_eq!(msg.offer(), Some((xfer::kind::SCENE, 4096)));
 
@@ -202,7 +220,9 @@ fn a_state_frame_round_trips_and_junk_is_rejected() {
 
     // A gauge frame is not a node message, and an unknown opcode is refused.
     let mut master = Bus::new();
-    assert!(master.feed(&protocol::frame(0x2D, &[1, 2]).unwrap()).is_none());
+    assert!(master
+        .feed(&protocol::frame(0x2D, &[1, 2]).unwrap())
+        .is_none());
     assert!(master.feed(&protocol::frame(1, &[0xEE]).unwrap()).is_none());
 }
 
@@ -217,11 +237,17 @@ fn a_node_reports_an_input_and_the_master_lights_the_lamp() {
     let mut master = Bus::new();
     let display = BusView::new(3);
 
-    assert!(!indicators::get(Indicator::TurnLeft), "nothing has said yet");
+    assert!(
+        !indicators::get(Indicator::TurnLeft),
+        "nothing has said yet"
+    );
     let report = display.report_lamp(Indicator::TurnLeft, true).unwrap();
     let msg = master.feed(&report).unwrap();
     assert_eq!((msg.node, msg.opcode), (3, Opcode::Input));
-    assert!(indicators::get(Indicator::TurnLeft), "the master ignored it");
+    assert!(
+        indicators::get(Indicator::TurnLeft),
+        "the master ignored it"
+    );
 
     // And the bank goes out as a frame, exactly as any gauge does.
     let frame = cogware_can::frame_for(cogware_can::INDICATORS1.id).unwrap();
@@ -424,7 +450,10 @@ fn the_state_follows_the_hardware_once_the_firmware_says_so() {
 fn a_radio_that_is_off_cannot_be_accepting_devices() {
     let mut bus = Bus::new();
     // Nothing is on, so there is nothing for a phone to arrive on.
-    assert!(!bus.set_pairing(true), "pairing on a dead radio must be refused");
+    assert!(
+        !bus.set_pairing(true),
+        "pairing on a dead radio must be refused"
+    );
     assert!(!bus.state().pairing());
 
     bus.set_radio(RADIO_BLUETOOTH, true);
@@ -443,7 +472,10 @@ fn turning_one_radio_off_leaves_the_other_alone() {
     bus.set_radio(RADIO_BLUETOOTH | RADIO_WIFI, true);
     bus.set_radio(RADIO_BLUETOOTH, false);
     assert!(!bus.state().bluetooth_on());
-    assert!(bus.state().wifi_on(), "wifi was switched off with bluetooth");
+    assert!(
+        bus.state().wifi_on(),
+        "wifi was switched off with bluetooth"
+    );
 }
 
 #[test]
@@ -529,7 +561,10 @@ fn a_server_that_refuses_says_so_rather_than_going_quiet() {
     bus.radio_failed(RadioFault::Denied);
     view.feed(&bus.state_frame().expect("a state must frame"));
 
-    assert_eq!(ask.poll(&view, at(100)), RadioWait::Failed(RadioFault::Denied));
+    assert_eq!(
+        ask.poll(&view, at(100)),
+        RadioWait::Failed(RadioFault::Denied)
+    );
 }
 
 #[test]
@@ -576,7 +611,11 @@ fn an_outcome_does_not_come_undone_on_a_later_broadcast() {
 
     bus.set_radio(RADIO_BLUETOOTH, false);
     view.feed(&bus.state_frame().expect("a state must frame"));
-    assert_eq!(ask.poll(&view, at(20)), RadioWait::Done, "the outcome moved");
+    assert_eq!(
+        ask.poll(&view, at(20)),
+        RadioWait::Done,
+        "the outcome moved"
+    );
 }
 
 #[test]
@@ -635,7 +674,12 @@ fn a_health_report_survives_the_bus_unchanged() {
     use cogware_can::bus::{BusView, Health, NodeMsg};
 
     let display = BusView::new(2);
-    let said = Health { fps: 23, compose_us: 4100, painted: 19_358, rects: 2 };
+    let said = Health {
+        fps: 23,
+        compose_us: 4100,
+        painted: 19_358,
+        rects: 2,
+    };
     let frame = display.report_health(&said).expect("fits a frame");
 
     let heard = NodeMsg::parse(&frame).expect("is a node message");
@@ -649,6 +693,11 @@ fn a_short_health_report_is_refused_rather_than_guessed() {
     assert_eq!(Health::decode(&[23, 0x04, 0x10, 0xbe]), None);
     assert_eq!(
         Health::decode(&[23, 0x04, 0x10, 0xbe, 0x00, 0x02]),
-        Some(Health { fps: 23, compose_us: 0x1004, painted: 190, rects: 2 })
+        Some(Health {
+            fps: 23,
+            compose_us: 0x1004,
+            painted: 190,
+            rects: 2
+        })
     );
 }

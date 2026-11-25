@@ -61,10 +61,22 @@ pub struct Unit {
 
 impl Unit {
     const fn base(symbol: &'static str, scale: i32, quantity: Quantity) -> Self {
-        Unit { symbol, scale, quantity, factor: 1.0, offset: 0.0 }
+        Unit {
+            symbol,
+            scale,
+            quantity,
+            factor: 1.0,
+            offset: 0.0,
+        }
     }
     const fn derived(symbol: &'static str, quantity: Quantity, factor: f32, offset: f32) -> Self {
-        Unit { symbol, scale: 1, quantity, factor, offset }
+        Unit {
+            symbol,
+            scale: 1,
+            quantity,
+            factor,
+            offset,
+        }
     }
 
     // Canonical (base) units. The `scale` here is what gauges store in.
@@ -99,7 +111,8 @@ impl Unit {
     pub const G_FORCE: Unit = Unit::base("G", 100, Quantity::Acceleration);
 
     // Display-only units, reachable through conversion.
-    pub const FAHRENHEIT: Unit = Unit::derived("°F", Quantity::Temperature, 5.0 / 9.0, -160.0 / 9.0);
+    pub const FAHRENHEIT: Unit =
+        Unit::derived("°F", Quantity::Temperature, 5.0 / 9.0, -160.0 / 9.0);
     pub const KELVIN: Unit = Unit::derived("K", Quantity::Temperature, 1.0, -273.15);
     pub const PSI: Unit = Unit::derived("psi", Quantity::Pressure, 6.894_757, 0.0);
     pub const BAR: Unit = Unit::derived("bar", Quantity::Pressure, 100.0, 0.0);

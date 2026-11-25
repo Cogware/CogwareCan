@@ -3,9 +3,8 @@
 //! server's radios, and answers the node message channel.
 
 use super::{
-    RadioFault, RADIO_FAULT_NONE,
-    indicators, BusState, CanFrame, NodeMsg, Opcode, FLAG_MODE_LOCKED, FLAG_UPDATE, MODE_NORMAL,
-    RADIO_BLUETOOTH, RADIO_PAIRING, RADIO_WIFI,
+    indicators, BusState, CanFrame, NodeMsg, Opcode, RadioFault, FLAG_MODE_LOCKED, FLAG_UPDATE,
+    MODE_NORMAL, RADIO_BLUETOOTH, RADIO_FAULT_NONE, RADIO_PAIRING, RADIO_WIFI,
 };
 
 /// The master's view: it owns the mode and the update flag, and answers the
@@ -56,7 +55,11 @@ impl Bus {
     /// Raise or lower a flag; `FLAG_UPDATE` is better set through
     /// `update_started` and `update_finished`.
     pub fn set_flag(&mut self, flag: u8, on: bool) {
-        let next = if on { self.state.flags | flag } else { self.state.flags & !flag };
+        let next = if on {
+            self.state.flags | flag
+        } else {
+            self.state.flags & !flag
+        };
         if next != self.state.flags {
             self.state.flags = next;
             self.dirty = true;

@@ -11,9 +11,18 @@ use common::bus;
 fn every_lamp_has_a_unique_bank_and_bit() {
     let mut seen = std::collections::HashSet::new();
     for &i in indicators::ALL_INDICATORS {
-        assert!((1..=2).contains(&i.bank()), "{} is in bank {}", i.name(), i.bank());
+        assert!(
+            (1..=2).contains(&i.bank()),
+            "{} is in bank {}",
+            i.name(),
+            i.bank()
+        );
         assert!(i.bit() < 32, "{} is bit {}", i.name(), i.bit());
-        assert!(seen.insert((i.bank(), i.bit())), "{} reuses a bit", i.name());
+        assert!(
+            seen.insert((i.bank(), i.bit())),
+            "{} reuses a bit",
+            i.name()
+        );
     }
     assert_eq!(seen.len(), indicators::ALL_INDICATORS.len());
 }
@@ -29,7 +38,10 @@ fn a_set_holds_lamps_from_both_banks() {
     assert!(s.contains(Indicator::TurnLeft) && !s.contains(Indicator::TurnRight));
 
     // Iteration is in table order, bank 1 before bank 2.
-    assert_eq!(s.iter().collect::<Vec<_>>(), vec![Indicator::TurnLeft, Indicator::Antilag]);
+    assert_eq!(
+        s.iter().collect::<Vec<_>>(),
+        vec![Indicator::TurnLeft, Indicator::Antilag]
+    );
 
     assert!(s.set(Indicator::TurnLeft, false));
     assert_eq!(s.len(), 1);
@@ -71,7 +83,10 @@ fn setting_one_lamp_leaves_the_rest_of_its_bank_alone() {
     indicators::set(Indicator::OilPressure, true);
     indicators::set(Indicator::HighBeam, true);
     assert!(indicators::set(Indicator::OilPressure, false));
-    assert!(!indicators::set(Indicator::OilPressure, false), "already out");
+    assert!(
+        !indicators::set(Indicator::OilPressure, false),
+        "already out"
+    );
 
     assert!(indicators::get(Indicator::CheckEngine) && indicators::get(Indicator::HighBeam));
     assert!(!indicators::get(Indicator::OilPressure));
@@ -125,7 +140,10 @@ fn the_bulb_check_lights_every_lamp() {
     assert!(indicators::get(Indicator::Airbag) && indicators::get(Indicator::Knock));
     let shown = indicators::displayed();
     assert_eq!(shown.len(), indicators::ALL_INDICATORS.len());
-    assert_eq!(shown.iter().collect::<Vec<_>>(), indicators::ALL_INDICATORS.to_vec());
+    assert_eq!(
+        shown.iter().collect::<Vec<_>>(),
+        indicators::ALL_INDICATORS.to_vec()
+    );
 
     // The banks themselves still carry only what the server set, so the lamp
     // test ends without having to remember what was lit before it began.
@@ -149,17 +167,30 @@ fn the_bulb_check_rides_the_wire_as_an_ordinary_bit() {
     indicators::clear_all();
     assert!(!indicators::get(Indicator::CheckBulb));
     feed_frame(&f).expect("an indicator bank is an ordinary gauge frame");
-    assert!(indicators::get(Indicator::CheckBulb), "bit 31 of bank 2 survives");
-    assert_eq!(indicators::displayed().len(), indicators::ALL_INDICATORS.len());
+    assert!(
+        indicators::get(Indicator::CheckBulb),
+        "bit 31 of bank 2 survives"
+    );
+    assert_eq!(
+        indicators::displayed().len(),
+        indicators::ALL_INDICATORS.len()
+    );
 }
 
 #[test]
 fn every_allocated_bit_is_in_its_banks_mask() {
     let lit = IndicatorSet::all_lit();
     for &i in indicators::ALL_INDICATORS {
-        assert!(lit.contains(i), "{} is missing from its bank mask", i.name());
+        assert!(
+            lit.contains(i),
+            "{} is missing from its bank mask",
+            i.name()
+        );
     }
     // Both banks are fully allocated today; the masks say so rather than
     // assuming it.
-    assert_eq!((lit.bank1, lit.bank2), (indicators::BANK1_ALL, indicators::BANK2_ALL));
+    assert_eq!(
+        (lit.bank1, lit.bank2),
+        (indicators::BANK1_ALL, indicators::BANK2_ALL)
+    );
 }

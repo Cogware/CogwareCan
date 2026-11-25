@@ -60,15 +60,31 @@ fn main() {
     // Only the one that owns the ID decodes the frame.
     println!("\nauto-detecting the source from the frame ID");
     clear_all();
-    for f in [be(0x360, &[3500, 0, 0, 0]), be(1512, &[0, 4000, 0, 0]), le(0x520, &[4500, 0, 0, 0])] {
-        let hit = CAN_SOURCES.iter().find_map(|s| s.feed_default(&f).map(|n| (s.name, n)));
+    for f in [
+        be(0x360, &[3500, 0, 0, 0]),
+        be(1512, &[0, 4000, 0, 0]),
+        le(0x520, &[4500, 0, 0, 0]),
+    ] {
+        let hit = CAN_SOURCES
+            .iter()
+            .find_map(|s| s.feed_default(&f).map(|n| (s.name, n)));
         match hit {
-            Some((name, n)) => println!("  {:#05x} -> {name}, {n} gauges, rpm now {}", protocol::id_of(&f).unwrap(), RPM.get_or(0)),
-            None => println!("  {:#05x} -> no source claims this ID", protocol::id_of(&f).unwrap()),
+            Some((name, n)) => println!(
+                "  {:#05x} -> {name}, {n} gauges, rpm now {}",
+                protocol::id_of(&f).unwrap(),
+                RPM.get_or(0)
+            ),
+            None => println!(
+                "  {:#05x} -> no source claims this ID",
+                protocol::id_of(&f).unwrap()
+            ),
         }
     }
     let stray = protocol::frame(0x123, &[0; 8]).unwrap();
-    println!("  0x123 -> {:?}", CAN_SOURCES.iter().find_map(|s| s.feed_default(&stray)));
+    println!(
+        "  0x123 -> {:?}",
+        CAN_SOURCES.iter().find_map(|s| s.feed_default(&stray))
+    );
 
     println!("\nID ranges each source listens on (at its default base)");
     for s in CAN_SOURCES {

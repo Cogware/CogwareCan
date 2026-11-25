@@ -107,13 +107,22 @@ fn n_header_is_validated() {
     let _bus = bus();
     let d = payload();
     assert_eq!(parse_n(&[b'n', 0x32]), Err(SpeeduinoError::Truncated));
-    assert_eq!(parse_n(&[b'A', 0x32, 1, 0]), Err(SpeeduinoError::BadCommand(b'A')));
-    assert_eq!(parse_n(&[b'n', 0x31, 1, 0]), Err(SpeeduinoError::BadFormat(0x31)));
+    assert_eq!(
+        parse_n(&[b'A', 0x32, 1, 0]),
+        Err(SpeeduinoError::BadCommand(b'A'))
+    );
+    assert_eq!(
+        parse_n(&[b'n', 0x31, 1, 0]),
+        Err(SpeeduinoError::BadFormat(0x31))
+    );
     let mut p = n_packet(&d);
     p.truncate(N_HEADER_LEN + 10);
     assert_eq!(
         parse_n(&p),
-        Err(SpeeduinoError::ShortPayload { declared: FULL_PAYLOAD_LEN, got: 10 })
+        Err(SpeeduinoError::ShortPayload {
+            declared: FULL_PAYLOAD_LEN,
+            got: 10
+        })
     );
     assert_eq!(n_payload_len(&[b'n', 0x32, 119]), Ok(119));
     // Trailing bytes after the declared length are ignored, not an error.

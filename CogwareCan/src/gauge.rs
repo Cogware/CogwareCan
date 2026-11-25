@@ -10,12 +10,12 @@
 //! reading of 87.5 °C is stored as 875 because `Unit::CELSIUS.scale == 10`.
 //! Use `GaugeData::as_f32` when a float is wanted for display.
 
+use crate::frame::CanFrame;
 use crate::pack::Wire;
 use crate::units::{Reading, Unit};
 use core::cell::Cell;
 use critical_section::Mutex;
 use embedded_can::{Frame, Id, StandardId};
-use crate::frame::CanFrame;
 use paste::paste;
 
 /// The value a gauge reads as when nothing has fed it.
@@ -98,7 +98,14 @@ pub struct GaugeData {
 
 impl core::fmt::Debug for GaugeData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}(0x{:03X}) = {:?}{}", self.name, self.id, self.get(), self.unit.symbol)
+        write!(
+            f,
+            "{}(0x{:03X}) = {:?}{}",
+            self.name,
+            self.id,
+            self.get(),
+            self.unit.symbol
+        )
     }
 }
 
@@ -125,7 +132,13 @@ impl core::ops::Deref for GaugeData {
 
 impl GaugeSpec {
     pub const fn new(name: &'static str, id: u16, wire: Wire, unit: Unit, source: Source) -> Self {
-        GaugeSpec { name, id, wire, unit, source }
+        GaugeSpec {
+            name,
+            id,
+            wire,
+            unit,
+            source,
+        }
     }
 }
 
@@ -164,7 +177,10 @@ impl GaugeData {
 
     /// Value with its unit attached, for conversion: `MAP.reading()?.psi()`.
     pub fn reading(&self) -> Option<Reading> {
-        self.get().map(|counts| Reading { counts, unit: self.unit })
+        self.get().map(|counts| Reading {
+            counts,
+            unit: self.unit,
+        })
     }
 
     /// Value converted to `target`: `MAP.to(Unit::PSI)`.

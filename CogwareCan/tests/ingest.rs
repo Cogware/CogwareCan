@@ -20,7 +20,13 @@ fn a_broadcast_ecu_is_decoded_without_being_named_first() {
     let _bus = bus();
     // rusEFI Speeds at its default base: rpm in the first word.
     let f = frame(0x201, &[0x70, 0x17, 0, 0, 0, 0, 0, 0]);
-    assert_eq!(ingest(&f), Fed::Ecu { source: "rusEFI", gauges: 6 });
+    assert_eq!(
+        ingest(&f),
+        Fed::Ecu {
+            source: "rusEFI",
+            gauges: 6
+        }
+    );
     assert_eq!(RPM.get(), Some(6000));
 }
 
@@ -31,7 +37,13 @@ fn a_different_ecu_lands_in_the_same_gauges() {
     // configured differently to read this than to read the rusEFI above:
     // the ID is the whole of how the source is known.
     let f = frame(0x520, &[0xB8, 0x0B, 0xFA, 0x00, 0xDC, 0x05, 0, 0]);
-    assert_eq!(ingest(&f), Fed::Ecu { source: "MaxxECU", gauges: 3 });
+    assert_eq!(
+        ingest(&f),
+        Fed::Ecu {
+            source: "MaxxECU",
+            gauges: 3
+        }
+    );
     assert_eq!(RPM.get(), Some(3000));
     assert_eq!(TPS.as_f32(), Some(25.0));
     assert_eq!(MAP.as_f32(), Some(150.0));
@@ -41,10 +53,16 @@ fn a_different_ecu_lands_in_the_same_gauges() {
 fn an_obd2_reply_fills_the_same_table_as_a_standalone() {
     let _bus = bus();
     // Mode 01 PID 0x05, coolant, 90 °C sent as 130.
-    assert_eq!(ingest(&frame(0x7E8, &[0x03, 0x41, 0x05, 130, 0, 0, 0, 0])), Fed::Obd2 { gauges: 1 });
+    assert_eq!(
+        ingest(&frame(0x7E8, &[0x03, 0x41, 0x05, 130, 0, 0, 0, 0])),
+        Fed::Obd2 { gauges: 1 }
+    );
     assert_eq!(CLNT.as_f32(), Some(90.0));
     // PID 0x0C, rpm in quarters: 3000 rpm is 12000.
-    assert_eq!(ingest(&frame(0x7E8, &[0x04, 0x41, 0x0C, 0x2E, 0xE0, 0, 0, 0])), Fed::Obd2 { gauges: 1 });
+    assert_eq!(
+        ingest(&frame(0x7E8, &[0x04, 0x41, 0x0C, 0x2E, 0xE0, 0, 0, 0])),
+        Fed::Obd2 { gauges: 1 }
+    );
     assert_eq!(RPM.get(), Some(3000));
 }
 
@@ -53,7 +71,10 @@ fn a_reply_to_a_pid_nothing_decodes_is_not_a_fault() {
     let _bus = bus();
     // The car answers what it likes. An unknown PID wrote no gauges, which
     // is a different thing from the frame being wrong.
-    assert_eq!(ingest(&frame(0x7E8, &[0x03, 0x41, 0xB7, 1, 0, 0, 0, 0])), Fed::Obd2 { gauges: 0 });
+    assert_eq!(
+        ingest(&frame(0x7E8, &[0x03, 0x41, 0xB7, 1, 0, 0, 0, 0])),
+        Fed::Obd2 { gauges: 0 }
+    );
 }
 
 #[test]
@@ -100,9 +121,19 @@ fn every_exhaust_probe_arrives_not_just_the_first() {
     // when one cylinder is running lean, and it is the disagreement between
     // them that says so -- which needs all eight.
     let f = frame(0x209, &[100, 101, 102, 103, 104, 105, 106, 140]);
-    assert_eq!(ingest(&f), Fed::Ecu { source: "rusEFI", gauges: 8 });
+    assert_eq!(
+        ingest(&f),
+        Fed::Ecu {
+            source: "rusEFI",
+            gauges: 8
+        }
+    );
     assert_eq!(EGT1.as_f32(), Some(500.0));
-    assert_eq!(EGT8.as_f32(), Some(700.0), "the eighth probe is 200 °C hotter");
+    assert_eq!(
+        EGT8.as_f32(),
+        Some(700.0),
+        "the eighth probe is 200 °C hotter"
+    );
 }
 
 #[test]
@@ -127,7 +158,12 @@ fn clearing_the_table_puts_every_gauge_back_to_no_data() {
     assert_ne!(RPM.raw(), NO_DATA);
     clear_all();
     for gauge in ALL_GAUGES {
-        assert_eq!(gauge.raw(), NO_DATA, "{} survived the table being cleared", gauge.name);
+        assert_eq!(
+            gauge.raw(),
+            NO_DATA,
+            "{} survived the table being cleared",
+            gauge.name
+        );
     }
 }
 

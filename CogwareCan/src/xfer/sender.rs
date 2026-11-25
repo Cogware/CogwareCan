@@ -2,8 +2,8 @@
 //! Master side of a transfer: turn an image into frames and track replies.
 
 use super::{check, Cmd, Image, Status, BLOCK_LEN, CMD_ID, DATA_ID, REPLY_ID};
-use crate::protocol::{frame, id_of, NODE_BROADCAST};
 use crate::frame::CanFrame;
+use crate::protocol::{frame, id_of, NODE_BROADCAST};
 use embedded_can::Frame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

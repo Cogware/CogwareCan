@@ -203,26 +203,45 @@ impl IndicatorSet {
 
     /// A set with every lamp the table allocates lit, `CheckBulb` included.
     pub const fn all_lit() -> Self {
-        IndicatorSet { bank1: BANK1_ALL, bank2: BANK2_ALL }
+        IndicatorSet {
+            bank1: BANK1_ALL,
+            bank2: BANK2_ALL,
+        }
     }
 
     /// What a dash should actually show: every lamp while `CheckBulb` is set,
     /// otherwise the set as it stands. A display draws from this; a server
     /// building a state works on the raw set and lets the display expand it.
     pub const fn displayed(self) -> Self {
-        if self.contains(Indicator::CheckBulb) { Self::all_lit() } else { self }
+        if self.contains(Indicator::CheckBulb) {
+            Self::all_lit()
+        } else {
+            self
+        }
     }
 
     /// True if `ind` is lit.
     pub const fn contains(&self, ind: Indicator) -> bool {
-        let word = if ind.bank() == 1 { self.bank1 } else { self.bank2 };
+        let word = if ind.bank() == 1 {
+            self.bank1
+        } else {
+            self.bank2
+        };
         word & ind.mask() != 0
     }
 
     /// Light or extinguish `ind`. Returns true if it changed.
     pub fn set(&mut self, ind: Indicator, on: bool) -> bool {
-        let word = if ind.bank() == 1 { &mut self.bank1 } else { &mut self.bank2 };
-        let next = if on { *word | ind.mask() } else { *word & !ind.mask() };
+        let word = if ind.bank() == 1 {
+            &mut self.bank1
+        } else {
+            &mut self.bank2
+        };
+        let next = if on {
+            *word | ind.mask()
+        } else {
+            *word & !ind.mask()
+        };
         let changed = next != *word;
         *word = next;
         changed
@@ -252,9 +271,17 @@ impl IndicatorSet {
 
 /// Light or extinguish one lamp in the gauge table. Returns true if it changed.
 pub fn set(ind: Indicator, on: bool) -> bool {
-    let gauge = if ind.bank() == 1 { &INDICATORS1 } else { &INDICATORS2 };
+    let gauge = if ind.bank() == 1 {
+        &INDICATORS1
+    } else {
+        &INDICATORS2
+    };
     let word = gauge.get_or(0) as u32;
-    let next = if on { word | ind.mask() } else { word & !ind.mask() };
+    let next = if on {
+        word | ind.mask()
+    } else {
+        word & !ind.mask()
+    };
     gauge.set(next as i32);
     next != word
 }

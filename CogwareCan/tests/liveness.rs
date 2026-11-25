@@ -34,7 +34,11 @@ fn a_gauge_nobody_writes_stays_where_it_was() {
     let _bus = bus();
     let before = CLNT.writes();
     RPM.set(1000);
-    assert_eq!(CLNT.writes(), before, "another gauge's write was counted here");
+    assert_eq!(
+        CLNT.writes(),
+        before,
+        "another gauge's write was counted here"
+    );
 }
 
 #[test]

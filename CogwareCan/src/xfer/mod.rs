@@ -62,7 +62,11 @@ pub fn check(bytes: &[u8]) -> u8 {
         crc ^= byte;
         let mut bit = 0;
         while bit < 8 {
-            crc = if crc & 0x80 != 0 { (crc << 1) ^ 0x2F } else { crc << 1 };
+            crc = if crc & 0x80 != 0 {
+                (crc << 1) ^ 0x2F
+            } else {
+                crc << 1
+            };
             bit += 1;
         }
     }
@@ -224,7 +228,11 @@ mod check_tests {
             for bit in 0..8 {
                 let mut bad = block;
                 bad[byte] ^= 1 << bit;
-                assert_ne!(check(&bad), want, "bit {bit} of byte {byte} slipped through");
+                assert_ne!(
+                    check(&bad),
+                    want,
+                    "bit {bit} of byte {byte} slipped through"
+                );
             }
         }
     }

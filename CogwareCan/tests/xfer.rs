@@ -3,9 +3,9 @@
 
 use cogware_can::protocol::NODE_BROADCAST;
 use cogware_can::xfer::*;
-use embedded_can::Frame;
-use cogware_can::{crc, protocol};
 use cogware_can::CanFrame;
+use cogware_can::{crc, protocol};
+use embedded_can::Frame;
 
 fn image(n: usize) -> Vec<u8> {
     (0..n).map(|i| (i * 7 % 251) as u8).collect()
@@ -13,7 +13,11 @@ fn image(n: usize) -> Vec<u8> {
 
 /// Run a session to completion. `drop` decides which master frames (by
 /// count) never reach the nodes. Returns the number of frames the master sent.
-fn run(tx: &mut Sender<&[u8]>, rxs: &mut [Receiver<BufferSink>], drop: &dyn Fn(usize) -> bool) -> usize {
+fn run(
+    tx: &mut Sender<&[u8]>,
+    rxs: &mut [Receiver<BufferSink>],
+    drop: &dyn Fn(usize) -> bool,
+) -> usize {
     run_watching(tx, rxs, drop, &mut |_| {})
 }
 
@@ -35,7 +39,11 @@ fn run_watching(
         }
         let f: Option<CanFrame> = tx.next_frame().or_else(|| {
             idle += 1;
-            if idle > 3 { tx.resend() } else { None }
+            if idle > 3 {
+                tx.resend()
+            } else {
+                None
+            }
         });
         let Some(f) = f else {
             assert!(idle < 20, "sender stalled in {:?}", tx.state());
@@ -137,7 +145,11 @@ fn a_block_spoilt_in_flight_is_caught_and_sent_again() {
         }
     }
 
-    assert_eq!(tx.state(), TxState::Done, "one spoilt block should not lose the image");
+    assert_eq!(
+        tx.state(),
+        TxState::Done,
+        "one spoilt block should not lose the image"
+    );
     assert_eq!(rx.spoilt(), 1, "the spoilt block was not noticed");
     assert!(rx.sink().committed);
     assert_eq!(&buf[..30], &img[..], "the image is wrong after a resend");
@@ -171,8 +183,14 @@ fn a_link_that_spoils_every_block_is_given_up_on_rather_than_retried_for_ever() 
         }
     }
 
-    assert!(matches!(tx.state(), TxState::Failed(_)), "a broken link must end the push");
-    assert!(!rx.sink().committed, "nothing may be committed from a broken link");
+    assert!(
+        matches!(tx.state(), TxState::Failed(_)),
+        "a broken link must end the push"
+    );
+    assert!(
+        !rx.sink().committed,
+        "nothing may be committed from a broken link"
+    );
 }
 
 #[test]
@@ -191,7 +209,10 @@ fn other_nodes_ignore_a_session_not_addressed_to_them() {
     let img = image(20);
     let mut b7 = [0u8; 32];
     let mut b9 = [0u8; 32];
-    let mut rxs = [Receiver::new(7, BufferSink::new(&mut b7)), Receiver::new(9, BufferSink::new(&mut b9))];
+    let mut rxs = [
+        Receiver::new(7, BufferSink::new(&mut b7)),
+        Receiver::new(9, BufferSink::new(&mut b9)),
+    ];
     let mut tx = Sender::new(7, &img[..], 1, 8, 1);
     run(&mut tx, &mut rxs, &|_| false);
     assert_eq!(tx.state(), TxState::Done);
@@ -205,7 +226,10 @@ fn broadcast_updates_every_node_and_rewinds_for_the_slowest() {
     let img = image(90);
     let mut b7 = [0u8; 96];
     let mut b9 = [0u8; 96];
-    let mut rxs = [Receiver::new(7, BufferSink::new(&mut b7)), Receiver::new(9, BufferSink::new(&mut b9))];
+    let mut rxs = [
+        Receiver::new(7, BufferSink::new(&mut b7)),
+        Receiver::new(9, BufferSink::new(&mut b9)),
+    ];
     let mut tx = Sender::new(NODE_BROADCAST, &img[..], 1, 5, 2);
     // Drop block 2 for everyone (frame 4); both nodes report it missing.
     run(&mut tx, &mut rxs, &|n| n == 4);
@@ -259,7 +283,14 @@ fn the_slot_and_kind_reach_the_sink() {
         }
     }
     assert_eq!(tx.state(), TxState::Done);
-    assert_eq!(rx.image(), Image { size: 40, kind: kind::SCENE, slot: 3 });
+    assert_eq!(
+        rx.image(),
+        Image {
+            size: 40,
+            kind: kind::SCENE,
+            slot: 3
+        }
+    );
     assert!(rx.sink().committed);
     assert_eq!(&rx.sink().buf[..40], &image[..]);
 }
@@ -270,11 +301,19 @@ fn a_begin_without_a_slot_byte_lands_in_slot_zero() {
     // rather than refusing the transfer outright.
     let mut store = [0u8; 16];
     let mut rx = Receiver::new(1, BufferSink::new(&mut store));
-    let begin = protocol::frame(CMD_ID, &[1, Cmd::Begin as u8, 8, 0, 0, 0, kind::FIRMWARE]).unwrap();
+    let begin =
+        protocol::frame(CMD_ID, &[1, Cmd::Begin as u8, 8, 0, 0, 0, kind::FIRMWARE]).unwrap();
 
     let reply = rx.feed(&begin).expect("the node answers");
     assert_eq!(reply.data()[1], Status::Ready as u8);
-    assert_eq!(rx.image(), Image { size: 8, kind: kind::FIRMWARE, slot: 0 });
+    assert_eq!(
+        rx.image(),
+        Image {
+            size: 8,
+            kind: kind::FIRMWARE,
+            slot: 0
+        }
+    );
 }
 
 #[test]
@@ -305,7 +344,10 @@ fn reported_progress_only_ever_climbs() {
     );
 
     assert_eq!(tx.state(), TxState::Done);
-    assert!(seen_full, "a finished transfer never reported the whole image");
+    assert!(
+        seen_full,
+        "a finished transfer never reported the whole image"
+    );
     assert_eq!(tx.percent(), 100);
 }
 
@@ -339,7 +381,11 @@ fn a_node_counts_the_blocks_that_arrived_out_of_turn() {
     let mut lossy = [0u8; 1024];
 
     let mut rx = [Receiver::new(3, BufferSink::new(&mut clean))];
-    run(&mut Sender::new(3, &image[..], kind::SCENE, 8, 1), &mut rx, &|_| false);
+    run(
+        &mut Sender::new(3, &image[..], kind::SCENE, 8, 1),
+        &mut rx,
+        &|_| false,
+    );
     assert_eq!(rx[0].gaps(), 0, "a bus that lost nothing has no gaps");
 
     // Frame 1 is the `Begin`, so frame 4 is the third data block and sits well
@@ -347,8 +393,16 @@ fn a_node_counts_the_blocks_that_arrived_out_of_turn() {
     // is what a gap is. A block lost at the *end* of a window is found by the
     // checkpoint instead and leaves no gap behind it.
     let mut rx = [Receiver::new(3, BufferSink::new(&mut lossy))];
-    run(&mut Sender::new(3, &image[..], kind::SCENE, 8, 1), &mut rx, &|n| n == 4);
-    assert_eq!(rx[0].gaps(), 1, "the block after the lost one arrived out of turn");
+    run(
+        &mut Sender::new(3, &image[..], kind::SCENE, 8, 1),
+        &mut rx,
+        &|n| n == 4,
+    );
+    assert_eq!(
+        rx[0].gaps(),
+        1,
+        "the block after the lost one arrived out of turn"
+    );
 }
 
 #[test]
@@ -369,7 +423,10 @@ fn progress_is_reported_as_the_transfer_goes_not_only_at_the_end() {
     });
 
     assert_eq!(tx.state(), TxState::Done);
-    let middling = seen.iter().filter(|d| **d > 0 && **d < image.len() as u32).count();
+    let middling = seen
+        .iter()
+        .filter(|d| **d > 0 && **d < image.len() as u32)
+        .count();
     assert!(
         middling >= 3,
         "progress went {seen:?}; a whole transfer reported nothing in between"
@@ -412,7 +469,10 @@ fn a_sender_waits_for_a_source_that_has_not_caught_up() {
     let mut rxs = [Receiver::new(4, BufferSink::new(&mut buf))];
     let mut tx = Sender::new(
         4,
-        Trickle { image: &image, filled: 0 },
+        Trickle {
+            image: &image,
+            filled: 0,
+        },
         kind::FIRMWARE,
         8,
         1,
@@ -444,7 +504,11 @@ fn a_sender_waits_for_a_source_that_has_not_caught_up() {
     assert!(stalls > 5, "the source never actually held the sender up");
     let sink = rxs[0].sink();
     assert!(sink.committed, "a streamed image still has to commit");
-    assert_eq!(&sink.buf[..image.len()], &image[..], "the image arrived wrong");
+    assert_eq!(
+        &sink.buf[..image.len()],
+        &image[..],
+        "the image arrived wrong"
+    );
 }
 
 #[test]
@@ -452,11 +516,18 @@ fn a_streamed_image_is_declared_with_the_size_and_crc_the_source_gives() {
     // The sender never sees the whole image, so it cannot work either out: the
     // `Begin` it sends and the `End` it verifies both come from the source.
     let image = image(250);
-    let src = Trickle { image: &image, filled: 0 };
+    let src = Trickle {
+        image: &image,
+        filled: 0,
+    };
     let tx = Sender::new(6, src, kind::FIRMWARE, 8, 1);
     assert_eq!(
         tx.image(),
-        Image { size: 250, kind: kind::FIRMWARE, slot: 0 }
+        Image {
+            size: 250,
+            kind: kind::FIRMWARE,
+            slot: 0
+        }
     );
 }
 

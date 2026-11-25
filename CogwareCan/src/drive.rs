@@ -185,7 +185,11 @@ impl Car {
             return ideal;
         }
         let top = GEAR_TOP_KMH[usize::from(held) - 1];
-        let bottom = if held > 1 { GEAR_TOP_KMH[usize::from(held) - 2] } else { 0.0 };
+        let bottom = if held > 1 {
+            GEAR_TOP_KMH[usize::from(held) - 2]
+        } else {
+            0.0
+        };
         // Stay put while the speed is still within this gear's band, widened
         // at both ends so crossing a boundary has to mean it.
         if self.kmh <= top + MARGIN_KMH && self.kmh >= bottom - MARGIN_KMH {
@@ -228,7 +232,11 @@ impl Car {
             0 => IDLE_RPM + sinf(self.at_s * 1.7) * 25.0 + self.throttle * 8.0,
             g => {
                 let top = GEAR_TOP_KMH[usize::from(g) - 1];
-                let bottom = if g > 1 { GEAR_TOP_KMH[usize::from(g) - 2] } else { 0.0 };
+                let bottom = if g > 1 {
+                    GEAR_TOP_KMH[usize::from(g) - 2]
+                } else {
+                    0.0
+                };
                 let through = ((self.kmh - bottom) / (top - bottom)).clamp(0.0, 1.0);
                 let revs = IDLE_RPM + 350.0 + through * (SHIFT_AT - IDLE_RPM - 350.0);
                 // Working harder holds a gear longer, so it sits higher.
@@ -367,9 +375,9 @@ mod tests {
         // The thing a sweep cannot show: the tachometer falling while the
         // speedometer keeps climbing.
         let seen = lap();
-        let dropped = seen.windows(2).any(|w| {
-            w[1].gear > w[0].gear && w[1].gear > 0 && w[1].rpm < w[0].rpm - 200.0
-        });
+        let dropped = seen
+            .windows(2)
+            .any(|w| w[1].gear > w[0].gear && w[1].gear > 0 && w[1].rpm < w[0].rpm - 200.0);
         assert!(dropped, "a shift should drop the revs");
     }
 
@@ -393,8 +401,14 @@ mod tests {
     #[test]
     fn oil_pressure_follows_the_revs() {
         let seen = lap();
-        let idling = seen.iter().min_by(|a, b| a.rpm.total_cmp(&b.rpm)).expect("samples");
-        let working = seen.iter().max_by(|a, b| a.rpm.total_cmp(&b.rpm)).expect("samples");
+        let idling = seen
+            .iter()
+            .min_by(|a, b| a.rpm.total_cmp(&b.rpm))
+            .expect("samples");
+        let working = seen
+            .iter()
+            .max_by(|a, b| a.rpm.total_cmp(&b.rpm))
+            .expect("samples");
         assert!(
             working.oil_pres > idling.oil_pres + 100.0,
             "pressure should rise with revs"
@@ -426,8 +440,6 @@ mod tests {
         assert!(car.reading(0xFFFF).is_none(), "and an unknown id is none");
     }
 
-
-
     #[test]
     fn it_takes_a_car_s_worth_of_time_to_reach_a_speed() {
         // The first version did nought to a hundred and ninety in eighteen
@@ -435,9 +447,15 @@ mod tests {
         let seen = lap();
         let step = LAP_S / seen.len() as f32;
         let from = seen.iter().position(|c| c.kmh >= 5.0).expect("pulls away");
-        let to = seen.iter().position(|c| c.kmh >= 95.0).expect("reaches speed");
+        let to = seen
+            .iter()
+            .position(|c| c.kmh >= 95.0)
+            .expect("reaches speed");
         let took = (to - from) as f32 * step;
-        assert!(took > 8.0, "nought to ninety-five took {took:.1}s, too quick");
+        assert!(
+            took > 8.0,
+            "nought to ninety-five took {took:.1}s, too quick"
+        );
     }
 
     #[test]
@@ -492,7 +510,10 @@ mod tests {
         assert_eq!(trace[0], 0, "it starts at a standstill");
         let peak = trace.iter().copied().max().expect("samples");
         // Eighty miles an hour, in tenths of a km/h.
-        assert!((1280..1300).contains(&peak), "peak of {peak} is not the US06's");
+        assert!(
+            (1280..1300).contains(&peak),
+            "peak of {peak} is not the US06's"
+        );
     }
 
     #[test]
@@ -511,7 +532,10 @@ mod tests {
             .iter()
             .filter(|c| c.throttle > 5.0 && c.throttle < 30.0 && c.kmh > 40.0)
             .count();
-        assert!(cruising > 0, "there should be some cruising in a real trace");
+        assert!(
+            cruising > 0,
+            "there should be some cruising in a real trace"
+        );
     }
 
     #[test]

@@ -198,20 +198,59 @@ pub static SOURCE: CanSource = CanSource {
     name: "rusEFI",
     default_base: DEFAULT_BASE,
     frames: &[
-        CanFrameMap { id_offset: 0, fields: STATUS },
-        CanFrameMap { id_offset: 1, fields: SPEEDS },
-        CanFrameMap { id_offset: 2, fields: PEDAL_AND_TPS },
-        CanFrameMap { id_offset: 3, fields: SENSORS1 },
-        CanFrameMap { id_offset: 4, fields: SENSORS2 },
-        CanFrameMap { id_offset: 5, fields: FUELING },
-        CanFrameMap { id_offset: 6, fields: FUELING2 },
-        CanFrameMap { id_offset: 7, fields: FUELING3 },
-        CanFrameMap { id_offset: 8, fields: CAMS },
-        CanFrameMap { id_offset: 9, fields: EGTS },
-        CanFrameMap { id_offset: 10, fields: KNOCK },
+        CanFrameMap {
+            id_offset: 0,
+            fields: STATUS,
+        },
+        CanFrameMap {
+            id_offset: 1,
+            fields: SPEEDS,
+        },
+        CanFrameMap {
+            id_offset: 2,
+            fields: PEDAL_AND_TPS,
+        },
+        CanFrameMap {
+            id_offset: 3,
+            fields: SENSORS1,
+        },
+        CanFrameMap {
+            id_offset: 4,
+            fields: SENSORS2,
+        },
+        CanFrameMap {
+            id_offset: 5,
+            fields: FUELING,
+        },
+        CanFrameMap {
+            id_offset: 6,
+            fields: FUELING2,
+        },
+        CanFrameMap {
+            id_offset: 7,
+            fields: FUELING3,
+        },
+        CanFrameMap {
+            id_offset: 8,
+            fields: CAMS,
+        },
+        CanFrameMap {
+            id_offset: 9,
+            fields: EGTS,
+        },
+        CanFrameMap {
+            id_offset: 10,
+            fields: KNOCK,
+        },
     ],
     lamps: &[
-        LampFrame { id_offset: 0, flags: STATUS_LAMPS },
-        LampFrame { id_offset: 11, flags: BRAKE_LAMP },
+        LampFrame {
+            id_offset: 0,
+            flags: STATUS_LAMPS,
+        },
+        LampFrame {
+            id_offset: 11,
+            flags: BRAKE_LAMP,
+        },
     ],
 };

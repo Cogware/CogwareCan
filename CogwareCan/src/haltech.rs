@@ -121,24 +121,78 @@ pub static SOURCE: CanSource = CanSource {
     name: "Haltech",
     default_base: DEFAULT_BASE,
     frames: &[
-        CanFrameMap { id_offset: 0x360, fields: F360 },
-        CanFrameMap { id_offset: 0x361, fields: F361 },
-        CanFrameMap { id_offset: 0x362, fields: F362 },
-        CanFrameMap { id_offset: 0x368, fields: F368 },
-        CanFrameMap { id_offset: 0x369, fields: F369 },
-        CanFrameMap { id_offset: 0x36F, fields: F36F },
-        CanFrameMap { id_offset: 0x370, fields: F370 },
-        CanFrameMap { id_offset: 0x372, fields: F372 },
-        CanFrameMap { id_offset: 0x373, fields: F373 },
-        CanFrameMap { id_offset: 0x374, fields: F374 },
-        CanFrameMap { id_offset: 0x3E0, fields: F3E0 },
-        CanFrameMap { id_offset: 0x3E1, fields: F3E1 },
-        CanFrameMap { id_offset: 0x3E2, fields: F3E2 },
-        CanFrameMap { id_offset: 0x3E3, fields: F3E3 },
-        CanFrameMap { id_offset: 0x3E9, fields: F3E9 },
-        CanFrameMap { id_offset: 0x3EB, fields: F3EB },
-        CanFrameMap { id_offset: 0x470, fields: F470 },
-        CanFrameMap { id_offset: 0x471, fields: F471 },
+        CanFrameMap {
+            id_offset: 0x360,
+            fields: F360,
+        },
+        CanFrameMap {
+            id_offset: 0x361,
+            fields: F361,
+        },
+        CanFrameMap {
+            id_offset: 0x362,
+            fields: F362,
+        },
+        CanFrameMap {
+            id_offset: 0x368,
+            fields: F368,
+        },
+        CanFrameMap {
+            id_offset: 0x369,
+            fields: F369,
+        },
+        CanFrameMap {
+            id_offset: 0x36F,
+            fields: F36F,
+        },
+        CanFrameMap {
+            id_offset: 0x370,
+            fields: F370,
+        },
+        CanFrameMap {
+            id_offset: 0x372,
+            fields: F372,
+        },
+        CanFrameMap {
+            id_offset: 0x373,
+            fields: F373,
+        },
+        CanFrameMap {
+            id_offset: 0x374,
+            fields: F374,
+        },
+        CanFrameMap {
+            id_offset: 0x3E0,
+            fields: F3E0,
+        },
+        CanFrameMap {
+            id_offset: 0x3E1,
+            fields: F3E1,
+        },
+        CanFrameMap {
+            id_offset: 0x3E2,
+            fields: F3E2,
+        },
+        CanFrameMap {
+            id_offset: 0x3E3,
+            fields: F3E3,
+        },
+        CanFrameMap {
+            id_offset: 0x3E9,
+            fields: F3E9,
+        },
+        CanFrameMap {
+            id_offset: 0x3EB,
+            fields: F3EB,
+        },
+        CanFrameMap {
+            id_offset: 0x470,
+            fields: F470,
+        },
+        CanFrameMap {
+            id_offset: 0x471,
+            fields: F471,
+        },
     ],
     // No status bits mapped: this protocol's flag words are not documented
     // per-bit in the material this converter was written from, and a lamp lit
